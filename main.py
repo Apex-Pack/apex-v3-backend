@@ -189,10 +189,11 @@ async def trigger_pipeline():
     on demand instead of waiting for 6am UTC.
     """
     try:
-        await run_daily_pipeline(supabase)
+        import asyncio
+        asyncio.create_task(run_daily_pipeline(supabase))
         return {
-            "status": "completed",
-            "message": "Daily pipeline completed successfully",
+            "status": "triggered",
+            "message": "Daily pipeline started manually",
             "timestamp": datetime.now(timezone.utc).isoformat()
         }
     except Exception as e:
