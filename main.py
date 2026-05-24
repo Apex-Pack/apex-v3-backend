@@ -8,6 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 from supabase import create_client, Client
 from task_engine import create_scheduler, run_daily_pipeline
+from observability import init_sentry, init_langsmith, get_observability_status
 import os
 from datetime import datetime, timezone
 
@@ -52,7 +53,14 @@ scheduler = create_scheduler(supabase)
 @app.on_event("startup")
 async def startup_event():
     """Runs when the FastAPI server boots up on Railway."""
+    # Initialize observability first
+    # so we catch errors from the very first moment
+    init_sentry()
+    init_langsmith()
+    
+    # Start the scheduler
     scheduler.start()
+    
     print(f"[APEX] System online at {datetime.now(timezone.utc)}")
     print(f"[APEX] Scheduler started — daily pipeline runs at 06:00 UTC")
 
@@ -95,11 +103,12 @@ def health_check():
             }
         }).execute()
 
-        return {
+       return {
             "status": "healthy",
             "database": "connected",
             "scheduler": "running" if scheduler.running else "stopped",
             "next_pipeline_run": str(scheduler.get_job("daily_pipeline").next_run_time),
+            "observability": get_observability_status(),
             "timestamp": datetime.now(timezone.utc).isoformat()
         }
 
