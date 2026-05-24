@@ -180,7 +180,22 @@ def get_treasury_summary():
     except Exception as e:
         return {"error": str(e)}
 
-
+@app.get("/pipeline/run")
+async def trigger_pipeline_get():
+    """
+    GET version of the pipeline trigger.
+    Lets us test from the browser directly.
+    """
+    try:
+        await run_daily_pipeline(supabase)
+        return {
+            "status": "completed",
+            "message": "Daily pipeline completed successfully",
+            "timestamp": datetime.now(timezone.utc).isoformat()
+        }
+    except Exception as e:
+        return {"error": str(e)}
+        
 @app.post("/pipeline/run")
 async def trigger_pipeline():
     """
