@@ -12,23 +12,14 @@ from observability import init_sentry, init_langsmith, get_observability_status
 import os
 from datetime import datetime, timezone
 
-# Load environment variables
 load_dotenv()
 
-# ============================================
-# Initialize FastAPI app
-# ============================================
 app = FastAPI(
     title="APEX V3",
     description="Autonomous Business Operating System — The House of Packard",
     version="3.0.0"
 )
 
-# ============================================
-# CORS Middleware
-# Allows the dashboard on Vercel to talk to
-# this backend on Railway
-# ============================================
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -37,46 +28,28 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ============================================
-# Connect to Supabase
-# ============================================
 supabase: Client = create_client(
     os.getenv("SUPABASE_URL"),
     os.getenv("SUPABASE_SERVICE_KEY")
 )
 
-# ============================================
-# Scheduler — starts with the app, stops with the app
-# ============================================
 scheduler = create_scheduler(supabase)
 
 @app.on_event("startup")
 async def startup_event():
-    """Runs when the FastAPI server boots up on Railway."""
-    # Initialize observability first
-    # so we catch errors from the very first moment
     init_sentry()
     init_langsmith()
-    
-    # Start the scheduler
     scheduler.start()
-    
     print(f"[APEX] System online at {datetime.now(timezone.utc)}")
     print(f"[APEX] Scheduler started — daily pipeline runs at 06:00 UTC")
 
 @app.on_event("shutdown")
 async def shutdown_event():
-    """Runs when the server shuts down."""
     scheduler.shutdown()
     print(f"[APEX] System offline at {datetime.now(timezone.utc)}")
 
-# ============================================
-# Routes
-# ============================================
-
 @app.get("/")
 def root():
-    """Root endpoint — confirms the server is alive."""
     return {
         "system": "APEX V3",
         "status": "online",
@@ -84,14 +57,8 @@ def root():
         "timestamp": datetime.now(timezone.utc).isoformat()
     }
 
-
 @app.get("/health")
 def health_check():
-    """
-    Health check endpoint.
-    Railway pings this to confirm the server is running.
-    Writes a heartbeat to the audit log.
-    """
     try:
         supabase.table("audit_log").insert({
             "agent": "system",
@@ -103,7 +70,7 @@ def health_check():
             }
         }).execute()
 
-       return {
+        return {
             "status": "healthy",
             "database": "connected",
             "scheduler": "running" if scheduler.running else "stopped",
@@ -120,10 +87,8 @@ def health_check():
             "timestamp": datetime.now(timezone.utc).isoformat()
         }
 
-
 @app.get("/agents")
 def get_agents():
-    """Returns the status of all 7 agents."""
     try:
         response = supabase.table("agents").select("*").execute()
         return {
@@ -133,10 +98,8 @@ def get_agents():
     except Exception as e:
         return {"error": str(e)}
 
-
 @app.get("/opportunities")
 def get_opportunities():
-    """Returns all opportunities ordered by score."""
     try:
         response = supabase.table("opportunities")\
             .select("*")\
@@ -149,10 +112,8 @@ def get_opportunities():
     except Exception as e:
         return {"error": str(e)}
 
-
 @app.get("/tasks/recent")
 def get_recent_tasks():
-    """Returns the 50 most recent agent tasks."""
     try:
         response = supabase.table("tasks")\
             .select("*")\
@@ -166,10 +127,8 @@ def get_recent_tasks():
     except Exception as e:
         return {"error": str(e)}
 
-
 @app.get("/treasury/summary")
 def get_treasury_summary():
-    """Returns a financial summary for the dashboard."""
     try:
         response = supabase.table("financial_events")\
             .select("*")\
@@ -191,10 +150,6 @@ def get_treasury_summary():
 
 @app.get("/pipeline/run")
 async def trigger_pipeline_get():
-    """
-    GET version of the pipeline trigger.
-    Lets us test from the browser directly.
-    """
     try:
         await run_daily_pipeline(supabase)
         return {
@@ -204,20 +159,14 @@ async def trigger_pipeline_get():
         }
     except Exception as e:
         return {"error": str(e)}
-        
+
 @app.post("/pipeline/run")
 async def trigger_pipeline():
-    """
-    Manually triggers the full daily pipeline.
-    Use this from the dashboard to run the system
-    on demand instead of waiting for 6am UTC.
-    """
     try:
-        import asyncio
-        asyncio.create_task(run_daily_pipeline(supabase))
+        await run_daily_pipeline(supabase)
         return {
-            "status": "triggered",
-            "message": "Daily pipeline started manually",
+            "status": "completed",
+            "message": "Daily pipeline completed successfully",
             "timestamp": datetime.now(timezone.utc).isoformat()
         }
     except Exception as e:
