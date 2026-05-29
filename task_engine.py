@@ -10,6 +10,7 @@ from supabase import Client
 import traceback
 from helpers import log_task_start, log_task_complete, log_task_failed, update_agent_status
 from agents.scout import run_scout as scout_agent
+from agents.analyst import run_analyst as analyst_agent
 
 # ============================================
 # Guardrail Checker
@@ -55,17 +56,12 @@ async def run_scout(supabase: Client):
 
 
 async def run_analyst(supabase: Client):
-    """Analyst Agent — full implementation Week 2, Day 7."""
-    task_id = await log_task_start(supabase, "analyst", "research", "demand_validation", {"mode": "placeholder"})
+    """Analyst Agent — Alan — live implementation active."""
     try:
-        await update_agent_status(supabase, "analyst", "running")
-        result = {"status": "placeholder", "message": "Analyst — full implementation coming Day 7"}
-        await log_task_complete(supabase, task_id, result)
-        await update_agent_status(supabase, "analyst", "idle")
-        print(f"[ANALYST] Placeholder run complete")
+        await analyst_agent(supabase)
     except Exception as e:
-        await log_task_failed(supabase, task_id, str(e))
-        await update_agent_status(supabase, "analyst", "error")
+        error_msg = traceback.format_exc()
+        print(f"[ALAN] Failed: {error_msg}")
 
 
 async def run_recon(supabase: Client):
