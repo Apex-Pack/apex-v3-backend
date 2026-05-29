@@ -308,8 +308,8 @@ def get_treasury_summary():
 @app.get("/scout/run")
 async def run_scout_debug():
     try:
-        from agents.scout import run_scout as scout_agent
-        result = await scout_agent(supabase)
+        from agents.scout import run_scout
+        result = await run_scout(supabase)
         return {
             "status": "completed",
             "result": result,
@@ -328,8 +328,8 @@ async def run_scout_debug():
 @app.get("/analyst/run")
 async def run_analyst_debug():
     try:
-        from agents.analyst import run_analyst as analyst_agent
-        result = await analyst_agent(supabase)
+        from agents.analyst import run_analyst
+        result = await run_analyst(supabase)
         return {
             "status": "completed",
             "result": result,
