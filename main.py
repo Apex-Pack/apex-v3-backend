@@ -37,8 +37,6 @@ supabase: Client = create_client(
 )
 
 scheduler = create_scheduler(supabase)
-
-# Store OAuth state temporarily in memory
 oauth_state_store = {}
 
 @app.on_event("startup")
@@ -94,38 +92,22 @@ def health_check():
             "timestamp": datetime.now(timezone.utc).isoformat()
         }
 
-# ============================================
-# Etsy OAuth Flow
-# Visit /etsy/auth to start the flow
-# Etsy redirects back to /etsy/callback
-# ============================================
-
 @app.get("/etsy/auth")
 async def etsy_auth():
-    """
-    Step 1 of OAuth — redirects you to Etsy
-    to authorize APEX to access your shop.
-    Visit this URL in your browser once.
-    """
     import hashlib
     import base64
 
     api_key = os.getenv("ETSY_API_KEY")
     callback_url = f"{os.getenv('RAILWAY_URL', 'https://web-production-8056d.up.railway.app')}/etsy/callback"
 
-    # Generate PKCE code verifier and challenge
     code_verifier = secrets.token_urlsafe(64)
     code_challenge = base64.urlsafe_b64encode(
         hashlib.sha256(code_verifier.encode()).digest()
     ).rstrip(b'=').decode()
 
-    # Generate state for CSRF protection
     state = secrets.token_urlsafe(32)
-
-    # Store verifier linked to state
     oauth_state_store[state] = code_verifier
 
-    # Scopes we need
     scopes = " ".join([
         "listings_r",
         "listings_w",
@@ -150,29 +132,65 @@ async def etsy_auth():
     return RedirectResponse(url=auth_url)
 
 
+@app.get("/etsy/auth/debug")
+async def etsy_auth_debug():
+    import hashlib
+    import base64
+
+    api_key = os.getenv("ETSY_API_KEY")
+    callback_url = f"{os.getenv('RAILWAY_URL', 'https://web-production-8056d.up.railway.app')}/etsy/callback"
+
+    code_verifier = secrets.token_urlsafe(64)
+    code_challenge = base64.urlsafe_b64encode(
+        hashlib.sha256(code_verifier.encode()).digest()
+    ).rstrip(b'=').decode()
+
+    state = secrets.token_urlsafe(32)
+
+    scopes = " ".join([
+        "listings_r",
+        "listings_w",
+        "listings_d",
+        "shops_r",
+        "shops_w",
+        "transactions_r",
+        "billing_r",
+    ])
+
+    auth_url = (
+        f"https://www.etsy.com/oauth/connect"
+        f"?response_type=code"
+        f"&redirect_uri={callback_url}"
+        f"&scope={scopes}"
+        f"&client_id={api_key}"
+        f"&state={state}"
+        f"&code_challenge={code_challenge}"
+        f"&code_challenge_method=S256"
+    )
+
+    return {
+        "callback_url_being_sent": callback_url,
+        "api_key_loaded": bool(api_key),
+        "full_auth_url": auth_url,
+        "instruction": "Make sure callback_url_being_sent exactly matches what is in your Etsy app settings"
+    }
+
+
 @app.get("/etsy/callback")
 async def etsy_callback(code: str = None, state: str = None, error: str = None):
-    """
-    Step 2 of OAuth — Etsy redirects here after
-    you authorize the app. Exchanges the code
-    for an access token and refresh token.
-    """
     if error:
         return {"error": f"Etsy authorization failed: {error}"}
 
     if not code or not state:
         return {"error": "Missing code or state parameter"}
 
-    # Retrieve code verifier
     code_verifier = oauth_state_store.get(state)
     if not code_verifier:
         return {"error": "Invalid state — possible CSRF attack or session expired"}
 
     api_key = os.getenv("ETSY_API_KEY")
-    shared_secret = os.getenv("ETSY_SHARED_SECRET")
     callback_url = f"{os.getenv('RAILWAY_URL', 'https://web-production-8056d.up.railway.app')}/etsy/callback"
 
-    # Exchange code for tokens
     async with httpx.AsyncClient() as client:
         response = await client.post(
             "https://api.etsy.com/v3/public/oauth/token",
@@ -198,10 +216,8 @@ async def etsy_callback(code: str = None, state: str = None, error: str = None):
     refresh_token = token_data.get("refresh_token")
     expires_in = token_data.get("expires_in")
 
-    # Clean up state store
     oauth_state_store.pop(state, None)
 
-    # Log to audit table
     supabase.table("audit_log").insert({
         "agent": "system",
         "action": "etsy_oauth_complete",
@@ -291,7 +307,6 @@ def get_treasury_summary():
 
 @app.get("/scout/run")
 async def run_scout_debug():
-    """Runs Scout in isolation for debugging."""
     try:
         from agents.scout import run_scout as scout_agent
         result = await scout_agent(supabase)
