@@ -325,6 +325,26 @@ async def run_scout_debug():
         }
 
 
+@app.get("/analyst/run")
+async def run_analyst_debug():
+    try:
+        from agents.analyst import run_analyst as analyst_agent
+        result = await analyst_agent(supabase)
+        return {
+            "status": "completed",
+            "result": result,
+            "timestamp": datetime.now(timezone.utc).isoformat()
+        }
+    except Exception as e:
+        import traceback
+        return {
+            "status": "error",
+            "error": str(e),
+            "traceback": traceback.format_exc(),
+            "timestamp": datetime.now(timezone.utc).isoformat()
+        }
+
+
 @app.get("/pipeline/run")
 async def trigger_pipeline_get():
     try:
