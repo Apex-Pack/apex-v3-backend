@@ -148,6 +148,29 @@ def get_treasury_summary():
     except Exception as e:
         return {"error": str(e)}
 
+@app.get("/scout/run")
+async def run_scout_debug():
+    """
+    Runs Scout in isolation for debugging.
+    Shows exactly what Scout finds and any errors.
+    """
+    try:
+        from agents.scout import run_scout as scout_agent
+        result = await scout_agent(supabase)
+        return {
+            "status": "completed",
+            "result": result,
+            "timestamp": datetime.now(timezone.utc).isoformat()
+        }
+    except Exception as e:
+        import traceback
+        return {
+            "status": "error",
+            "error": str(e),
+            "traceback": traceback.format_exc(),
+            "timestamp": datetime.now(timezone.utc).isoformat()
+        }
+
 @app.get("/pipeline/run")
 async def trigger_pipeline_get():
     try:
