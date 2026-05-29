@@ -17,8 +17,9 @@ ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 
 def etsy_headers():
     access_token = os.getenv("ETSY_ACCESS_TOKEN")
+    shared_secret = os.getenv("ETSY_SHARED_SECRET")
     return {
-        "x-api-key": ETSY_API_KEY,
+        "x-api-key": f"{ETSY_API_KEY}:{shared_secret}",
         "Authorization": f"Bearer {access_token}",
         "Content-Type": "application/json"
     }
@@ -49,9 +50,6 @@ async def search_etsy_listings(query: str, limit: int = 25) -> dict:
             return {"results": [], "count": 0}
 
 async def get_trending_searches() -> list:
-    """
-    Seed search terms Scout uses to scan Etsy.
-    """
     return [
         "funny hiking shirt",
         "trail running gift",
@@ -78,8 +76,7 @@ async def get_trending_searches() -> list:
 async def analyze_opportunity(client: Anthropic, query: str, listings: list) -> dict:
     """
     Sends real Etsy listing data to Claude and
-    asks it to score the opportunity using the
-    APEX V3 scoring model.
+    scores the opportunity using the APEX V3 model.
     """
     listing_summary = []
     for l in listings[:10]:
