@@ -12,6 +12,7 @@ from apscheduler.triggers.cron import CronTrigger
 from datetime import datetime, timezone
 from supabase import Client
 import traceback
+from agents.scout import run_scout as scout_agent
 
 # ============================================
 # Task Logger
@@ -143,35 +144,13 @@ async def log_guardrail_event(supabase: Client, agent: str, action: str, rule: s
 async def run_scout(supabase: Client):
     """
     Scout Agent — finds trending Etsy opportunities.
-    Full implementation: Week 2, Day 6.
+    Full implementation active.
     """
-    task_id = await log_task_start(
-        supabase, "scout", "research", 
-        "trend_analysis", 
-        {"mode": "dry_run", "scheduled": True}
-    )
-    
     try:
-        await update_agent_status(supabase, "scout", "running")
-        
-        # ── SCOUT LOGIC GOES HERE (Week 2) ──
-        # For now just log that Scout ran successfully
-        result = {
-            "status": "placeholder",
-            "message": "Scout agent placeholder — full implementation in Week 2",
-            "timestamp": datetime.now(timezone.utc).isoformat()
-        }
-        
-        await log_task_complete(supabase, task_id, result)
-        await update_agent_status(supabase, "scout", "idle")
-        print(f"[SCOUT] Completed successfully at {datetime.now(timezone.utc)}")
-        
+        await scout_agent(supabase)
     except Exception as e:
         error_msg = traceback.format_exc()
-        await log_task_failed(supabase, task_id, error_msg)
-        await update_agent_status(supabase, "scout", "error")
-        print(f"[SCOUT] Failed: {str(e)}")
-
+        print(f"[SCOUT] Failed: {error_msg}")
 
 async def run_analyst(supabase: Client):
     """
