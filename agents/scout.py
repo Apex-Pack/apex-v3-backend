@@ -24,11 +24,12 @@ from observability import trace_agent_call, report_error
 
 ETSY_API_BASE = "https://openapi.etsy.com/v3"
 ETSY_API_KEY = os.getenv("ETSY_API_KEY")
+ETSY_SHARED_SECRET = os.getenv("ETSY_SHARED_SECRET")
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 
 def etsy_headers():
     return {
-        "x-api-key": ETSY_API_KEY,
+        "x-api-key": f"{ETSY_API_KEY}:{ETSY_SHARED_SECRET}",
         "Content-Type": "application/json"
     }
 
