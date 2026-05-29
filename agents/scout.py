@@ -10,35 +10,38 @@ from anthropic import Anthropic
 from datetime import datetime, timezone
 from helpers import log_task_start, log_task_complete, log_task_failed, update_agent_status
 from observability import report_error
+from token_manager import get_etsy_headers
 
 ETSY_API_BASE = "https://openapi.etsy.com/v3"
 
-def etsy_headers():
-    return {
-        "x-api-key": f"{os.getenv('ETSY_API_KEY')}:{os.getenv('ETSY_SHARED_SECRET')}",
-        "Authorization": f"Bearer {os.getenv('ETSY_ACCESS_TOKEN')}",
-        "Content-Type": "application/json"
-    }
-
-async def search_etsy_listings(query: str, limit: int = 25) -> dict:
-    async with httpx.AsyncClient() as client:
-        response = await client.get(
-            f"{ETSY_API_BASE}/application/listings/active",
-            headers=etsy_headers(),
-            params={
-                "keywords": query,
-                "limit": limit,
-                "sort_on": "score",
-                "sort_order": "desc",
-                "includes": ["Shop", "Images"],
-            },
-            timeout=30.0
-        )
-        if response.status_code == 200:
-            return response.json()
-        else:
-            print(f"[SCOUT] Etsy API error: {response.status_code} — {response.text}")
-            return {"results": [], "count": 0}
+async def search_etsy_listings(supabase, query: str, limit: int = 25) -> dict:
+    """
+    Searches Etsy for listings matching a query.
+    Uses token manager to always get a valid token.
+    """
+    try:
+        headers = await get_etsy_headers(supabase)
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                f"{ETSY_API_BASE}/application/listings/active",
+                headers=headers,
+                params={
+                    "keywords": query,
+                    "limit": limit,
+                    "sort_on": "score",
+                    "sort_order": "desc",
+                    "includes": ["Shop", "Images"],
+                },
+                timeout=30.0
+            )
+            if response.status_code == 200:
+                return response.json()
+            else:
+                print(f"[SCOUT] Etsy API error: {response.status_code} — {response.text}")
+                return {"results": [], "count": 0}
+    except Exception as e:
+        print(f"[SCOUT] Search error: {str(e)}")
+        return {"results": [], "count": 0}
 
 async def get_trending_searches() -> list:
     return [
@@ -187,8 +190,6 @@ async def run_scout(supabase):
 
         anthropic_key = os.getenv("ANTHROPIC_API_KEY")
         print(f"[SCOUT] Anthropic key loaded: {bool(anthropic_key)}")
-        print(f"[SCOUT] Etsy key loaded: {bool(os.getenv('ETSY_API_KEY'))}")
-        print(f"[SCOUT] Etsy token loaded: {bool(os.getenv('ETSY_ACCESS_TOKEN'))}")
 
         client = Anthropic(api_key=anthropic_key)
         search_terms = await get_trending_searches()
@@ -202,7 +203,7 @@ async def run_scout(supabase):
             print(f"[SCOUT] Scanning: '{term}'")
 
             try:
-                etsy_data = await search_etsy_listings(term)
+                etsy_data = await search_etsy_listings(supabase, term)
                 listings = etsy_data.get("results", [])
 
                 if not listings:
