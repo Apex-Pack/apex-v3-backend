@@ -14,7 +14,7 @@ import json
 import httpx
 from anthropic import Anthropic
 from datetime import datetime, timezone
-from task_engine import log_task_start, log_task_complete, log_task_failed, update_agent_status
+from helpers import log_task_start, log_task_complete, log_task_failed, update_agent_status
 from observability import trace_agent_call, report_error
 
 # ============================================
