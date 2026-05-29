@@ -5,11 +5,14 @@
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import RedirectResponse
 from dotenv import load_dotenv
 from supabase import create_client, Client
 from task_engine import create_scheduler, run_daily_pipeline
 from observability import init_sentry, init_langsmith, get_observability_status
 import os
+import httpx
+import secrets
 from datetime import datetime, timezone
 
 load_dotenv()
@@ -34,6 +37,9 @@ supabase: Client = create_client(
 )
 
 scheduler = create_scheduler(supabase)
+
+# Store OAuth state temporarily in memory
+oauth_state_store = {}
 
 @app.on_event("startup")
 async def startup_event():
@@ -76,6 +82,7 @@ def health_check():
             "scheduler": "running" if scheduler.running else "stopped",
             "next_pipeline_run": str(scheduler.get_job("daily_pipeline").next_run_time),
             "observability": get_observability_status(),
+            "etsy_oauth": "configured" if os.getenv("ETSY_ACCESS_TOKEN") else "not configured",
             "timestamp": datetime.now(timezone.utc).isoformat()
         }
 
@@ -87,6 +94,136 @@ def health_check():
             "timestamp": datetime.now(timezone.utc).isoformat()
         }
 
+# ============================================
+# Etsy OAuth Flow
+# Visit /etsy/auth to start the flow
+# Etsy redirects back to /etsy/callback
+# ============================================
+
+@app.get("/etsy/auth")
+async def etsy_auth():
+    """
+    Step 1 of OAuth — redirects you to Etsy
+    to authorize APEX to access your shop.
+    Visit this URL in your browser once.
+    """
+    import hashlib
+    import base64
+
+    api_key = os.getenv("ETSY_API_KEY")
+    callback_url = f"{os.getenv('RAILWAY_URL', 'https://web-production-8056d.up.railway.app')}/etsy/callback"
+
+    # Generate PKCE code verifier and challenge
+    code_verifier = secrets.token_urlsafe(64)
+    code_challenge = base64.urlsafe_b64encode(
+        hashlib.sha256(code_verifier.encode()).digest()
+    ).rstrip(b'=').decode()
+
+    # Generate state for CSRF protection
+    state = secrets.token_urlsafe(32)
+
+    # Store verifier linked to state
+    oauth_state_store[state] = code_verifier
+
+    # Scopes we need
+    scopes = " ".join([
+        "listings_r",
+        "listings_w",
+        "listings_d",
+        "shops_r",
+        "shops_w",
+        "transactions_r",
+        "billing_r",
+    ])
+
+    auth_url = (
+        f"https://www.etsy.com/oauth/connect"
+        f"?response_type=code"
+        f"&redirect_uri={callback_url}"
+        f"&scope={scopes}"
+        f"&client_id={api_key}"
+        f"&state={state}"
+        f"&code_challenge={code_challenge}"
+        f"&code_challenge_method=S256"
+    )
+
+    return RedirectResponse(url=auth_url)
+
+
+@app.get("/etsy/callback")
+async def etsy_callback(code: str = None, state: str = None, error: str = None):
+    """
+    Step 2 of OAuth — Etsy redirects here after
+    you authorize the app. Exchanges the code
+    for an access token and refresh token.
+    """
+    if error:
+        return {"error": f"Etsy authorization failed: {error}"}
+
+    if not code or not state:
+        return {"error": "Missing code or state parameter"}
+
+    # Retrieve code verifier
+    code_verifier = oauth_state_store.get(state)
+    if not code_verifier:
+        return {"error": "Invalid state — possible CSRF attack or session expired"}
+
+    api_key = os.getenv("ETSY_API_KEY")
+    shared_secret = os.getenv("ETSY_SHARED_SECRET")
+    callback_url = f"{os.getenv('RAILWAY_URL', 'https://web-production-8056d.up.railway.app')}/etsy/callback"
+
+    # Exchange code for tokens
+    async with httpx.AsyncClient() as client:
+        response = await client.post(
+            "https://api.etsy.com/v3/public/oauth/token",
+            data={
+                "grant_type": "authorization_code",
+                "client_id": api_key,
+                "redirect_uri": callback_url,
+                "code": code,
+                "code_verifier": code_verifier,
+            },
+            headers={"Content-Type": "application/x-www-form-urlencoded"}
+        )
+
+    if response.status_code != 200:
+        return {
+            "error": "Token exchange failed",
+            "status_code": response.status_code,
+            "details": response.text
+        }
+
+    token_data = response.json()
+    access_token = token_data.get("access_token")
+    refresh_token = token_data.get("refresh_token")
+    expires_in = token_data.get("expires_in")
+
+    # Clean up state store
+    oauth_state_store.pop(state, None)
+
+    # Log to audit table
+    supabase.table("audit_log").insert({
+        "agent": "system",
+        "action": "etsy_oauth_complete",
+        "success": True,
+        "details": {
+            "expires_in": expires_in,
+            "has_refresh_token": bool(refresh_token),
+            "timestamp": datetime.now(timezone.utc).isoformat()
+        }
+    }).execute()
+
+    return {
+        "status": "SUCCESS — COPY THESE VALUES TO RAILWAY",
+        "instructions": "Add ETSY_ACCESS_TOKEN and ETSY_REFRESH_TOKEN as Railway environment variables",
+        "ETSY_ACCESS_TOKEN": access_token,
+        "ETSY_REFRESH_TOKEN": refresh_token,
+        "expires_in_seconds": expires_in,
+        "expires_in_hours": round(expires_in / 3600, 1) if expires_in else None,
+        "timestamp": datetime.now(timezone.utc).isoformat()
+    }
+
+
 @app.get("/agents")
 def get_agents():
     try:
@@ -97,6 +234,7 @@ def get_agents():
         }
     except Exception as e:
         return {"error": str(e)}
+
 
 @app.get("/opportunities")
 def get_opportunities():
@@ -112,6 +250,7 @@ def get_opportunities():
     except Exception as e:
         return {"error": str(e)}
 
+
 @app.get("/tasks/recent")
 def get_recent_tasks():
     try:
@@ -126,6 +265,7 @@ def get_recent_tasks():
         }
     except Exception as e:
         return {"error": str(e)}
+
 
 @app.get("/treasury/summary")
 def get_treasury_summary():
@@ -148,12 +288,10 @@ def get_treasury_summary():
     except Exception as e:
         return {"error": str(e)}
 
+
 @app.get("/scout/run")
 async def run_scout_debug():
-    """
-    Runs Scout in isolation for debugging.
-    Shows exactly what Scout finds and any errors.
-    """
+    """Runs Scout in isolation for debugging."""
     try:
         from agents.scout import run_scout as scout_agent
         result = await scout_agent(supabase)
@@ -171,6 +309,7 @@ async def run_scout_debug():
             "timestamp": datetime.now(timezone.utc).isoformat()
         }
 
+
 @app.get("/pipeline/run")
 async def trigger_pipeline_get():
     try:
@@ -182,6 +321,7 @@ async def trigger_pipeline_get():
         }
     except Exception as e:
         return {"error": str(e)}
+
 
 @app.post("/pipeline/run")
 async def trigger_pipeline():
