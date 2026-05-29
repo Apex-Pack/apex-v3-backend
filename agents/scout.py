@@ -2,12 +2,6 @@
 # APEX V3 — Scout Agent
 # The House of Packard
 # ============================================
-# Scout's job: Find what's selling on Etsy
-# right now. Identify gaps, trending niches,
-# and underserved demand. Score every
-# opportunity 0-100 and write results to
-# the opportunities table in Supabase.
-# ============================================
 
 import os
 import json
@@ -17,30 +11,23 @@ from datetime import datetime, timezone
 from helpers import log_task_start, log_task_complete, log_task_failed, update_agent_status
 from observability import trace_agent_call, report_error
 
-# ============================================
-# Etsy API Client
-# Handles all communication with Etsy's API
-# ============================================
-
 ETSY_API_BASE = "https://openapi.etsy.com/v3"
 ETSY_API_KEY = os.getenv("ETSY_API_KEY")
-ETSY_SHARED_SECRET = os.getenv("ETSY_SHARED_SECRET")
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 
 def etsy_headers():
+    access_token = os.getenv("ETSY_ACCESS_TOKEN")
     return {
-        "x-api-key": f"{ETSY_API_KEY}:{ETSY_SHARED_SECRET}",
+        "x-api-key": ETSY_API_KEY,
+        "Authorization": f"Bearer {access_token}",
         "Content-Type": "application/json"
     }
 
 async def search_etsy_listings(query: str, limit: int = 25) -> dict:
     """
     Searches Etsy for listings matching a query.
-    Returns listing data including prices, views, 
+    Returns listing data including prices, views,
     favorites, and shop info.
-    
-    Think of this as Scout walking the floor of
-    Etsy and taking notes on what he sees.
     """
     async with httpx.AsyncClient() as client:
         response = await client.get(
@@ -63,12 +50,7 @@ async def search_etsy_listings(query: str, limit: int = 25) -> dict:
 
 async def get_trending_searches() -> list:
     """
-    Returns a list of seed search terms Scout
-    will use to scan Etsy for opportunities.
-    
-    These are the starting points — broad enough
-    to surface real trends, specific enough to
-    find actionable niches.
+    Seed search terms Scout uses to scan Etsy.
     """
     return [
         "funny hiking shirt",
@@ -93,26 +75,14 @@ async def get_trending_searches() -> list:
         "funny work from home shirt",
     ]
 
-# ============================================
-# Claude-Powered Opportunity Analyzer
-# This is where Scout's intelligence lives.
-# Claude looks at real Etsy listing data and
-# decides what's worth pursuing.
-# ============================================
-
 async def analyze_opportunity(client: Anthropic, query: str, listings: list) -> dict:
     """
     Sends real Etsy listing data to Claude and
     asks it to score the opportunity using the
     APEX V3 scoring model.
-    
-    Claude acts as Scout's brain — it reads the
-    market data and produces a structured score.
     """
-    
-    # Prepare listing summary for Claude
     listing_summary = []
-    for l in listings[:10]:  # Analyze top 10 listings
+    for l in listings[:10]:
         listing_summary.append({
             "title": l.get("title", "")[:100],
             "price": l.get("price", {}).get("amount", 0) / max(l.get("price", {}).get("divisor", 100), 1),
@@ -208,9 +178,7 @@ Respond ONLY with valid JSON in this exact format:
     tokens_used = message.usage.input_tokens + message.usage.output_tokens
     cost_usd = (message.usage.input_tokens * 0.000003) + (message.usage.output_tokens * 0.000015)
 
-    # Parse JSON response
     try:
-        # Strip any markdown code blocks if present
         clean = response_text.strip()
         if clean.startswith("```"):
             clean = clean.split("```")[1]
@@ -224,11 +192,6 @@ Respond ONLY with valid JSON in this exact format:
         print(f"[SCOUT] JSON parse error: {e}")
         print(f"[SCOUT] Raw response: {response_text}")
         return None
-
-# ============================================
-# Main Scout Function
-# Called by the task engine every day at 6am
-# ============================================
 
 async def run_scout(supabase):
     """
@@ -261,7 +224,6 @@ async def run_scout(supabase):
             print(f"[SCOUT] Scanning: '{term}'")
 
             try:
-                # Search Etsy for real listing data
                 etsy_data = await search_etsy_listings(term)
                 listings = etsy_data.get("results", [])
 
@@ -269,7 +231,6 @@ async def run_scout(supabase):
                     print(f"[SCOUT] No listings found for '{term}' — skipping")
                     continue
 
-                # Send to Claude for scoring
                 opportunity = await analyze_opportunity(client, term, listings)
 
                 if not opportunity:
@@ -279,15 +240,12 @@ async def run_scout(supabase):
                 total_tokens += opportunity.get("tokens_used", 0)
                 opportunities_found += 1
 
-                # Only write to database if score >= 40
-                # Below 40 = not worth Analyst's time
                 final_score = opportunity.get("final_score", 0)
                 decision = opportunity.get("decision", "KILL")
 
                 if final_score >= 40 and decision != "KILL":
                     opportunities_pursued += 1
 
-                    # Write to Supabase opportunities table
                     supabase.table("opportunities").insert({
                         "title": opportunity.get("title", term),
                         "niche": opportunity.get("niche", ""),
@@ -316,11 +274,10 @@ async def run_scout(supabase):
                         }
                     }).execute()
 
-                    print(f"[SCOUT] ✓ Opportunity found: '{opportunity.get('title')}' — Score: {final_score} — Decision: {decision}")
+                    print(f"[SCOUT] ✓ Opportunity: '{opportunity.get('title')}' — Score: {final_score} — Decision: {decision}")
                 else:
                     print(f"[SCOUT] ✗ Rejected: '{term}' — Score: {final_score} — Decision: {decision}")
 
-                # Check daily token budget
                 if total_cost >= 8.0:
                     print(f"[SCOUT] Daily budget limit approaching (${total_cost:.2f}) — stopping early")
                     break
@@ -329,7 +286,6 @@ async def run_scout(supabase):
                 print(f"[SCOUT] Error processing '{term}': {str(e)}")
                 continue
 
-        # Log completion
         result = {
             "terms_scanned": len(search_terms),
             "opportunities_found": opportunities_found,
