@@ -9,27 +9,18 @@ import httpx
 from anthropic import Anthropic
 from datetime import datetime, timezone
 from helpers import log_task_start, log_task_complete, log_task_failed, update_agent_status
-from observability import trace_agent_call, report_error
+from observability import report_error
 
 ETSY_API_BASE = "https://openapi.etsy.com/v3"
-ETSY_API_KEY = os.getenv("ETSY_API_KEY")
-ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 
 def etsy_headers():
-    access_token = os.getenv("ETSY_ACCESS_TOKEN")
-    shared_secret = os.getenv("ETSY_SHARED_SECRET")
     return {
-        "x-api-key": f"{ETSY_API_KEY}:{shared_secret}",
-        "Authorization": f"Bearer {access_token}",
+        "x-api-key": f"{os.getenv('ETSY_API_KEY')}:{os.getenv('ETSY_SHARED_SECRET')}",
+        "Authorization": f"Bearer {os.getenv('ETSY_ACCESS_TOKEN')}",
         "Content-Type": "application/json"
     }
 
 async def search_etsy_listings(query: str, limit: int = 25) -> dict:
-    """
-    Searches Etsy for listings matching a query.
-    Returns listing data including prices, views,
-    favorites, and shop info.
-    """
     async with httpx.AsyncClient() as client:
         response = await client.get(
             f"{ETSY_API_BASE}/application/listings/active",
@@ -74,10 +65,6 @@ async def get_trending_searches() -> list:
     ]
 
 async def analyze_opportunity(client: Anthropic, query: str, listings: list) -> dict:
-    """
-    Sends real Etsy listing data to Claude and
-    scores the opportunity using the APEX V3 model.
-    """
     listing_summary = []
     for l in listings[:10]:
         listing_summary.append({
@@ -100,21 +87,18 @@ TOP LISTINGS DATA:
 SCORING RUBRIC (score each 0-20, total = sum):
 
 1. DEMAND SIGNAL (0-20): How strong is buyer demand?
-   - Check: views, favorites, number of results
-   - 16-20: Strong autocomplete presence, rising demand
+   - 16-20: Strong demand, high views and favorites
    - 11-15: Confirmed demand, steady trend
    - 6-10: Some demand but limited signals
    - 0-5: Weak or speculative demand
 
 2. COMPETITION WEAKNESS (0-20): How beatable is the competition?
-   - Check: listing quality, price consistency, review counts
    - 16-20: Weak competition, poor listings dominate
    - 11-15: Mixed quality, some weak listings on page 1
    - 6-10: Decent competition but gaps exist
    - 0-5: Strong established shops dominate
 
 3. MARGIN POTENTIAL (0-20): Can we make money?
-   - Check: average prices in the niche
    - 16-20: Prices $35+ with demand
    - 11-15: Prices $23-35, healthy margin
    - 6-10: Prices $15-22, tight but viable
@@ -132,12 +116,12 @@ SCORING RUBRIC (score each 0-20, total = sum):
    - 6-10: Adjacent to IP territory, proceed carefully
    - 0-5: Trademarked terms or copyright risk — KILL
 
-MANDATORY KILL CONDITIONS (return score 0 if any apply):
+MANDATORY KILL CONDITIONS:
 - Any trademarked brand names, sports teams, celebrities
-- Price average under $12 (margin impossible after fees)
+- Price average under $12
 - Legal safety score under 10
 
-Respond ONLY with valid JSON in this exact format:
+Respond ONLY with valid JSON:
 {{
   "title": "descriptive opportunity name",
   "niche": "broad category",
@@ -191,14 +175,6 @@ Respond ONLY with valid JSON in this exact format:
         return None
 
 async def run_scout(supabase):
-    """
-    Scout's full daily routine:
-    1. Get list of seed search terms
-    2. Search Etsy for each term
-    3. Send data to Claude for scoring
-    4. Write opportunities to Supabase
-    5. Log everything for observability
-    """
     task_id = await log_task_start(
         supabase, "scout", "research",
         "trend_analysis",
@@ -209,7 +185,12 @@ async def run_scout(supabase):
         await update_agent_status(supabase, "scout", "running")
         print(f"\n[SCOUT] Starting trend analysis at {datetime.now(timezone.utc)}")
 
-        client = Anthropic(api_key=ANTHROPIC_API_KEY)
+        anthropic_key = os.getenv("ANTHROPIC_API_KEY")
+        print(f"[SCOUT] Anthropic key loaded: {bool(anthropic_key)}")
+        print(f"[SCOUT] Etsy key loaded: {bool(os.getenv('ETSY_API_KEY'))}")
+        print(f"[SCOUT] Etsy token loaded: {bool(os.getenv('ETSY_ACCESS_TOKEN'))}")
+
+        client = Anthropic(api_key=anthropic_key)
         search_terms = await get_trending_searches()
 
         opportunities_found = 0
