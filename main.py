@@ -345,6 +345,26 @@ async def run_analyst_debug():
         }
 
 
+@app.get("/recon/run")
+async def run_recon_debug():
+    try:
+        from agents.recon import run_recon
+        result = await run_recon(supabase)
+        return {
+            "status": "completed",
+            "result": result,
+            "timestamp": datetime.now(timezone.utc).isoformat()
+        }
+    except Exception as e:
+        import traceback
+        return {
+            "status": "error",
+            "error": str(e),
+            "traceback": traceback.format_exc(),
+            "timestamp": datetime.now(timezone.utc).isoformat()
+        }
+
+
 @app.get("/pipeline/run")
 async def trigger_pipeline_get():
     try:
