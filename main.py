@@ -96,39 +96,22 @@ def health_check():
 async def etsy_auth():
     import hashlib
     import base64
-
     api_key = os.getenv("ETSY_API_KEY")
     callback_url = f"{os.getenv('RAILWAY_URL', 'https://web-production-8056d.up.railway.app')}/etsy/callback"
-
     code_verifier = secrets.token_urlsafe(64)
     code_challenge = base64.urlsafe_b64encode(
         hashlib.sha256(code_verifier.encode()).digest()
     ).rstrip(b'=').decode()
-
     state = secrets.token_urlsafe(32)
     oauth_state_store[state] = code_verifier
-
-    scopes = " ".join([
-        "listings_r",
-        "listings_w",
-        "listings_d",
-        "shops_r",
-        "shops_w",
-        "transactions_r",
-        "billing_r",
-    ])
-
+    scopes = " ".join(["listings_r","listings_w","listings_d","shops_r","shops_w","transactions_r","billing_r"])
     auth_url = (
         f"https://www.etsy.com/oauth/connect"
-        f"?response_type=code"
-        f"&redirect_uri={callback_url}"
-        f"&scope={scopes}"
-        f"&client_id={api_key}"
-        f"&state={state}"
-        f"&code_challenge={code_challenge}"
+        f"?response_type=code&redirect_uri={callback_url}"
+        f"&scope={scopes}&client_id={api_key}"
+        f"&state={state}&code_challenge={code_challenge}"
         f"&code_challenge_method=S256"
     )
-
     return RedirectResponse(url=auth_url)
 
 
@@ -136,38 +119,21 @@ async def etsy_auth():
 async def etsy_auth_debug():
     import hashlib
     import base64
-
     api_key = os.getenv("ETSY_API_KEY")
     callback_url = f"{os.getenv('RAILWAY_URL', 'https://web-production-8056d.up.railway.app')}/etsy/callback"
-
     code_verifier = secrets.token_urlsafe(64)
     code_challenge = base64.urlsafe_b64encode(
         hashlib.sha256(code_verifier.encode()).digest()
     ).rstrip(b'=').decode()
-
     state = secrets.token_urlsafe(32)
-
-    scopes = " ".join([
-        "listings_r",
-        "listings_w",
-        "listings_d",
-        "shops_r",
-        "shops_w",
-        "transactions_r",
-        "billing_r",
-    ])
-
+    scopes = " ".join(["listings_r","listings_w","listings_d","shops_r","shops_w","transactions_r","billing_r"])
     auth_url = (
         f"https://www.etsy.com/oauth/connect"
-        f"?response_type=code"
-        f"&redirect_uri={callback_url}"
-        f"&scope={scopes}"
-        f"&client_id={api_key}"
-        f"&state={state}"
-        f"&code_challenge={code_challenge}"
+        f"?response_type=code&redirect_uri={callback_url}"
+        f"&scope={scopes}&client_id={api_key}"
+        f"&state={state}&code_challenge={code_challenge}"
         f"&code_challenge_method=S256"
     )
-
     return {
         "callback_url_being_sent": callback_url,
         "api_key_loaded": bool(api_key),
@@ -180,17 +146,13 @@ async def etsy_auth_debug():
 async def etsy_callback(code: str = None, state: str = None, error: str = None):
     if error:
         return {"error": f"Etsy authorization failed: {error}"}
-
     if not code or not state:
         return {"error": "Missing code or state parameter"}
-
     code_verifier = oauth_state_store.get(state)
     if not code_verifier:
         return {"error": "Invalid state — possible CSRF attack or session expired"}
-
     api_key = os.getenv("ETSY_API_KEY")
     callback_url = f"{os.getenv('RAILWAY_URL', 'https://web-production-8056d.up.railway.app')}/etsy/callback"
-
     async with httpx.AsyncClient() as client:
         response = await client.post(
             "https://api.etsy.com/v3/public/oauth/token",
@@ -203,32 +165,19 @@ async def etsy_callback(code: str = None, state: str = None, error: str = None):
             },
             headers={"Content-Type": "application/x-www-form-urlencoded"}
         )
-
     if response.status_code != 200:
-        return {
-            "error": "Token exchange failed",
-            "status_code": response.status_code,
-            "details": response.text
-        }
-
+        return {"error": "Token exchange failed", "status_code": response.status_code, "details": response.text}
     token_data = response.json()
     access_token = token_data.get("access_token")
     refresh_token = token_data.get("refresh_token")
     expires_in = token_data.get("expires_in")
-
     oauth_state_store.pop(state, None)
-
     supabase.table("audit_log").insert({
         "agent": "system",
         "action": "etsy_oauth_complete",
         "success": True,
-        "details": {
-            "expires_in": expires_in,
-            "has_refresh_token": bool(refresh_token),
-            "timestamp": datetime.now(timezone.utc).isoformat()
-        }
+        "details": {"expires_in": expires_in, "has_refresh_token": bool(refresh_token), "timestamp": datetime.now(timezone.utc).isoformat()}
     }).execute()
-
     return {
         "status": "SUCCESS — COPY THESE VALUES TO RAILWAY",
         "instructions": "Add ETSY_ACCESS_TOKEN and ETSY_REFRESH_TOKEN as Railway environment variables",
@@ -244,10 +193,7 @@ async def etsy_callback(code: str = None, state: str = None, error: str = None):
 def get_agents():
     try:
         response = supabase.table("agents").select("*").execute()
-        return {
-            "agents": response.data,
-            "count": len(response.data)
-        }
+        return {"agents": response.data, "count": len(response.data)}
     except Exception as e:
         return {"error": str(e)}
 
@@ -255,14 +201,8 @@ def get_agents():
 @app.get("/opportunities")
 def get_opportunities():
     try:
-        response = supabase.table("opportunities")\
-            .select("*")\
-            .order("final_score", desc=True)\
-            .execute()
-        return {
-            "opportunities": response.data,
-            "count": len(response.data)
-        }
+        response = supabase.table("opportunities").select("*").order("final_score", desc=True).execute()
+        return {"opportunities": response.data, "count": len(response.data)}
     except Exception as e:
         return {"error": str(e)}
 
@@ -270,15 +210,8 @@ def get_opportunities():
 @app.get("/tasks/recent")
 def get_recent_tasks():
     try:
-        response = supabase.table("tasks")\
-            .select("*")\
-            .order("created_at", desc=True)\
-            .limit(50)\
-            .execute()
-        return {
-            "tasks": response.data,
-            "count": len(response.data)
-        }
+        response = supabase.table("tasks").select("*").order("created_at", desc=True).limit(50).execute()
+        return {"tasks": response.data, "count": len(response.data)}
     except Exception as e:
         return {"error": str(e)}
 
@@ -286,15 +219,11 @@ def get_recent_tasks():
 @app.get("/treasury/summary")
 def get_treasury_summary():
     try:
-        response = supabase.table("financial_events")\
-            .select("*")\
-            .execute()
-
+        response = supabase.table("financial_events").select("*").execute()
         events = response.data
         total_revenue = sum(e["amount"] for e in events if e["type"] == "revenue")
         total_costs = sum(e["amount"] for e in events if e["type"] == "cost")
         net_profit = total_revenue - total_costs
-
         return {
             "total_revenue": round(total_revenue, 2),
             "total_costs": round(total_costs, 2),
@@ -310,19 +239,10 @@ async def run_scout_debug():
     try:
         from agents.scout import run_scout
         result = await run_scout(supabase)
-        return {
-            "status": "completed",
-            "result": result,
-            "timestamp": datetime.now(timezone.utc).isoformat()
-        }
+        return {"status": "completed", "result": result, "timestamp": datetime.now(timezone.utc).isoformat()}
     except Exception as e:
         import traceback
-        return {
-            "status": "error",
-            "error": str(e),
-            "traceback": traceback.format_exc(),
-            "timestamp": datetime.now(timezone.utc).isoformat()
-        }
+        return {"status": "error", "error": str(e), "traceback": traceback.format_exc(), "timestamp": datetime.now(timezone.utc).isoformat()}
 
 
 @app.get("/analyst/run")
@@ -330,19 +250,10 @@ async def run_analyst_debug():
     try:
         from agents.analyst import run_analyst
         result = await run_analyst(supabase)
-        return {
-            "status": "completed",
-            "result": result,
-            "timestamp": datetime.now(timezone.utc).isoformat()
-        }
+        return {"status": "completed", "result": result, "timestamp": datetime.now(timezone.utc).isoformat()}
     except Exception as e:
         import traceback
-        return {
-            "status": "error",
-            "error": str(e),
-            "traceback": traceback.format_exc(),
-            "timestamp": datetime.now(timezone.utc).isoformat()
-        }
+        return {"status": "error", "error": str(e), "traceback": traceback.format_exc(), "timestamp": datetime.now(timezone.utc).isoformat()}
 
 
 @app.get("/recon/run")
@@ -350,30 +261,28 @@ async def run_recon_debug():
     try:
         from agents.recon import run_recon
         result = await run_recon(supabase)
-        return {
-            "status": "completed",
-            "result": result,
-            "timestamp": datetime.now(timezone.utc).isoformat()
-        }
+        return {"status": "completed", "result": result, "timestamp": datetime.now(timezone.utc).isoformat()}
     except Exception as e:
         import traceback
-        return {
-            "status": "error",
-            "error": str(e),
-            "traceback": traceback.format_exc(),
-            "timestamp": datetime.now(timezone.utc).isoformat()
-        }
+        return {"status": "error", "error": str(e), "traceback": traceback.format_exc(), "timestamp": datetime.now(timezone.utc).isoformat()}
+
+
+@app.get("/designer/run")
+async def run_designer_debug():
+    try:
+        from agents.designer import run_designer
+        result = await run_designer(supabase)
+        return {"status": "completed", "result": result, "timestamp": datetime.now(timezone.utc).isoformat()}
+    except Exception as e:
+        import traceback
+        return {"status": "error", "error": str(e), "traceback": traceback.format_exc(), "timestamp": datetime.now(timezone.utc).isoformat()}
 
 
 @app.get("/pipeline/run")
 async def trigger_pipeline_get():
     try:
         await run_daily_pipeline(supabase)
-        return {
-            "status": "completed",
-            "message": "Daily pipeline completed successfully",
-            "timestamp": datetime.now(timezone.utc).isoformat()
-        }
+        return {"status": "completed", "message": "Daily pipeline completed successfully", "timestamp": datetime.now(timezone.utc).isoformat()}
     except Exception as e:
         return {"error": str(e)}
 
@@ -382,10 +291,6 @@ async def trigger_pipeline_get():
 async def trigger_pipeline():
     try:
         await run_daily_pipeline(supabase)
-        return {
-            "status": "completed",
-            "message": "Daily pipeline completed successfully",
-            "timestamp": datetime.now(timezone.utc).isoformat()
-        }
+        return {"status": "completed", "message": "Daily pipeline completed successfully", "timestamp": datetime.now(timezone.utc).isoformat()}
     except Exception as e:
         return {"error": str(e)}
