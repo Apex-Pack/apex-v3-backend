@@ -13,10 +13,7 @@ from agents.scout import run_scout as scout_agent
 from agents.analyst import run_analyst as analyst_agent
 from agents.recon import run_recon as recon_agent
 from agents.designer import run_designer as designer_agent
-
-# ============================================
-# Guardrail Checker
-# ============================================
+from agents.copywriter import run_copywriter as copywriter_agent
 
 async def check_daily_listing_budget(supabase: Client) -> dict:
     today = datetime.now(timezone.utc).date().isoformat()
@@ -44,12 +41,7 @@ async def log_guardrail_event(supabase: Client, agent: str, action: str, rule: s
     }).execute()
 
 
-# ============================================
-# Agent Functions
-# ============================================
-
 async def run_scout(supabase: Client):
-    """Scout — live."""
     try:
         await scout_agent(supabase)
     except Exception as e:
@@ -57,7 +49,6 @@ async def run_scout(supabase: Client):
 
 
 async def run_analyst(supabase: Client):
-    """Alan — live."""
     try:
         await analyst_agent(supabase)
     except Exception as e:
@@ -65,7 +56,6 @@ async def run_analyst(supabase: Client):
 
 
 async def run_recon(supabase: Client):
-    """Rico — live."""
     try:
         await recon_agent(supabase)
     except Exception as e:
@@ -73,7 +63,6 @@ async def run_recon(supabase: Client):
 
 
 async def run_designer(supabase: Client):
-    """Dennis — live."""
     try:
         await designer_agent(supabase)
     except Exception as e:
@@ -81,19 +70,13 @@ async def run_designer(supabase: Client):
 
 
 async def run_copywriter(supabase: Client):
-    """Cody — full implementation next."""
-    task_id = await log_task_start(supabase, "copywriter", "forge", "listing_copy", {"mode": "placeholder"})
     try:
-        await update_agent_status(supabase, "copywriter", "running")
-        await log_task_complete(supabase, task_id, {"status": "placeholder"})
-        await update_agent_status(supabase, "copywriter", "idle")
+        await copywriter_agent(supabase)
     except Exception as e:
-        await log_task_failed(supabase, task_id, str(e))
-        await update_agent_status(supabase, "copywriter", "error")
+        print(f"[CODY] Failed: {traceback.format_exc()}")
 
 
 async def run_publisher(supabase: Client):
-    """Pam — full implementation Week 4."""
     task_id = await log_task_start(supabase, "publisher", "forge", "listing_publish", {"mode": "placeholder"})
     try:
         await update_agent_status(supabase, "publisher", "running")
@@ -105,7 +88,6 @@ async def run_publisher(supabase: Client):
 
 
 async def run_treasurer(supabase: Client):
-    """Trevor — full implementation Week 5."""
     task_id = await log_task_start(supabase, "treasurer", "treasury", "portfolio_review", {"mode": "placeholder"})
     try:
         await update_agent_status(supabase, "treasurer", "running")
@@ -115,10 +97,6 @@ async def run_treasurer(supabase: Client):
         await log_task_failed(supabase, task_id, str(e))
         await update_agent_status(supabase, "treasurer", "error")
 
-
-# ============================================
-# Daily Pipeline
-# ============================================
 
 async def run_daily_pipeline(supabase: Client):
     print(f"\n{'='*50}")
@@ -146,10 +124,6 @@ async def run_daily_pipeline(supabase: Client):
     await run_treasurer(supabase)
     print(f"\n[APEX] Daily pipeline complete at {datetime.now(timezone.utc)}\n")
 
-
-# ============================================
-# Scheduler
-# ============================================
 
 def create_scheduler(supabase: Client) -> AsyncIOScheduler:
     scheduler = AsyncIOScheduler(timezone="UTC")
