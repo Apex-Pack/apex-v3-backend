@@ -6,15 +6,75 @@
 import os
 import json
 import httpx
+import base64
+import io
 from anthropic import Anthropic
 from datetime import datetime, timezone
 from helpers import log_task_start, log_task_complete, log_task_failed, update_agent_status
 from observability import report_error
 
 GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta"
+DRIVE_FOLDER_ID = "1n9f2z-ZhnZOFjSdcXrUeT3L_ofCYNloS"
 
 
-async def generate_design_prompt(client: Anthropic, opportunity: dict, playbook: dict, variant: int) -> str:
+def get_drive_service():
+    """
+    Authenticates to Google Drive using the service account
+    credentials stored in Railway environment variables.
+    """
+    from google.oauth2 import service_account
+    from googleapiclient.discovery import build
+
+    service_account_info = json.loads(os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON"))
+    credentials = service_account.Credentials.from_service_account_info(
+        service_account_info,
+        scopes=["https://www.googleapis.com/auth/drive"]
+    )
+    return build("drive", "v3", credentials=credentials)
+
+
+async def upload_to_drive(image_data: str, mime_type: str, filename: str) -> dict:
+    """
+    Uploads a base64 image to the APEX Designs folder in Google Drive.
+    Returns the file ID and web view link.
+    """
+    try:
+        from googleapiclient.http import MediaIoBaseUpload
+
+        drive = get_drive_service()
+        image_bytes = base64.b64decode(image_data)
+        file_stream = io.BytesIO(image_bytes)
+
+        file_metadata = {
+            "name": filename,
+            "parents": [DRIVE_FOLDER_ID]
+        }
+
+        media = MediaIoBaseUpload(
+            file_stream,
+            mimetype=mime_type,
+            resumable=False
+        )
+
+        file = drive.files().create(
+            body=file_metadata,
+            media_body=media,
+            fields="id, webViewLink, name"
+        ).execute()
+
+        return {
+            "success": True,
+            "file_id": file.get("id"),
+            "view_link": file.get("webViewLink"),
+            "filename": file.get("name")
+        }
+
+    except Exception as e:
+        print(f"[DENNIS] Drive upload error: {str(e)}")
+        return {"success": False, "error": str(e)}
+
+
+async def generate_design_prompt(client: Anthropic, opportunity: dict, playbook: dict, variant: int) -> tuple:
     """
     Uses Claude to craft the perfect image generation
     prompt based on Rico's playbook.
@@ -109,23 +169,23 @@ async def generate_image(prompt: str) -> dict:
                                 "image_data": part["inlineData"]["data"],
                                 "mime_type": part["inlineData"]["mimeType"],
                             }
-                return {"success": False, "error": "No image in response", "raw": str(data)[:200]}
+                return {"success": False, "error": "No image in response"}
             else:
                 error_text = response.text[:300]
                 print(f"[DENNIS] Gemini API error: {response.status_code} — {error_text}")
-                return {"success": False, "error": f"API error {response.status_code}: {error_text}"}
+                return {"success": False, "error": f"API error {response.status_code}"}
 
     except Exception as e:
         print(f"[DENNIS] Image generation error: {str(e)}")
         return {"success": False, "error": str(e)}
 
 
-async def save_design(supabase, opportunity_id: str, variant: int, image_data: str, mime_type: str, prompt: str, product_type: str) -> dict:
+async def save_design(supabase, opportunity_id: str, variant: int, image_data: str, mime_type: str, prompt: str, product_type: str, drive_link: str = None, drive_file_id: str = None) -> dict:
     """
-    Saves design to Supabase products table.
-    Stores image as base64 in design_assets.
+    Saves design to Supabase products table with Drive link.
     """
     try:
+        extension = "png" if "png" in mime_type else "jpg"
         result = supabase.table("products").insert({
             "opportunity_id": opportunity_id,
             "title": f"Design Variant {variant}",
@@ -138,6 +198,8 @@ async def save_design(supabase, opportunity_id: str, variant: int, image_data: s
                 "mime_type": mime_type,
                 "image_data": image_data,
                 "has_image": True,
+                "drive_link": drive_link,
+                "drive_file_id": drive_file_id,
                 "generated_at": datetime.now(timezone.utc).isoformat()
             }
         }).execute()
@@ -157,7 +219,8 @@ async def run_designer(supabase):
     1. Pull opportunities with playbooks
     2. Generate design prompts using Claude
     3. Generate images using Gemini
-    4. Save designs to products table
+    4. Upload to Google Drive
+    5. Save designs to products table with Drive links
     """
     task_id = await log_task_start(
         supabase, "designer", "design_lab",
@@ -208,6 +271,7 @@ async def run_designer(supabase):
                 continue
 
             product_type = playbook.get("product_playbook", {}).get("primary_product_type", "shirt")
+            opp_title_clean = opp.get('title', 'design').replace(' ', '_').replace('/', '_')[:40]
             print(f"\n[DENNIS] Designing: '{opp.get('title')}' ({product_type})")
 
             variants_created = 0
@@ -226,6 +290,22 @@ async def run_designer(supabase):
                 image_result = await generate_image(design_prompt)
 
                 if image_result.get("success"):
+                    # Upload to Google Drive
+                    extension = "png" if "png" in image_result["mime_type"] else "jpg"
+                    filename = f"{opp_title_clean}_v{variant}_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}.{extension}"
+
+                    drive_result = await upload_to_drive(
+                        image_result["image_data"],
+                        image_result["mime_type"],
+                        filename
+                    )
+
+                    if drive_result.get("success"):
+                        print(f"[DENNIS] ✓ Uploaded to Drive: {drive_result.get('view_link')}")
+                    else:
+                        print(f"[DENNIS] ✗ Drive upload failed: {drive_result.get('error')}")
+
+                    # Save to Supabase with Drive link
                     save_result = await save_design(
                         supabase,
                         opp["id"],
@@ -233,7 +313,9 @@ async def run_designer(supabase):
                         image_result["image_data"],
                         image_result["mime_type"],
                         design_prompt,
-                        product_type
+                        product_type,
+                        drive_link=drive_result.get("view_link"),
+                        drive_file_id=drive_result.get("file_id")
                     )
 
                     if save_result.get("success"):
@@ -241,7 +323,7 @@ async def run_designer(supabase):
                         designs_created += 1
                         print(f"[DENNIS] ✓ Variant {variant} saved — Product ID: {save_result.get('product_id')}")
                     else:
-                        print(f"[DENNIS] ✗ Save failed for variant {variant}: {save_result.get('error')}")
+                        print(f"[DENNIS] ✗ Save failed: {save_result.get('error')}")
                 else:
                     print(f"[DENNIS] ✗ Image generation failed: {image_result.get('error')}")
 
