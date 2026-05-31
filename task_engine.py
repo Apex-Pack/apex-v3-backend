@@ -12,6 +12,7 @@ from helpers import log_task_start, log_task_complete, log_task_failed, update_a
 from agents.scout import run_scout as scout_agent
 from agents.analyst import run_analyst as analyst_agent
 from agents.recon import run_recon as recon_agent
+from agents.designer import run_designer as designer_agent
 
 # ============================================
 # Guardrail Checker
@@ -48,7 +49,7 @@ async def log_guardrail_event(supabase: Client, agent: str, action: str, rule: s
 # ============================================
 
 async def run_scout(supabase: Client):
-    """Scout Agent — live."""
+    """Scout — live."""
     try:
         await scout_agent(supabase)
     except Exception as e:
@@ -56,7 +57,7 @@ async def run_scout(supabase: Client):
 
 
 async def run_analyst(supabase: Client):
-    """Analyst Agent — Alan — live."""
+    """Alan — live."""
     try:
         await analyst_agent(supabase)
     except Exception as e:
@@ -64,7 +65,7 @@ async def run_analyst(supabase: Client):
 
 
 async def run_recon(supabase: Client):
-    """Recon Agent — Rico — live."""
+    """Rico — live."""
     try:
         await recon_agent(supabase)
     except Exception as e:
@@ -72,19 +73,15 @@ async def run_recon(supabase: Client):
 
 
 async def run_designer(supabase: Client):
-    """Designer Agent — Dennis — full implementation Week 3."""
-    task_id = await log_task_start(supabase, "designer", "design_lab", "design_generation", {"mode": "placeholder"})
+    """Dennis — live."""
     try:
-        await update_agent_status(supabase, "designer", "running")
-        await log_task_complete(supabase, task_id, {"status": "placeholder"})
-        await update_agent_status(supabase, "designer", "idle")
+        await designer_agent(supabase)
     except Exception as e:
-        await log_task_failed(supabase, task_id, str(e))
-        await update_agent_status(supabase, "designer", "error")
+        print(f"[DENNIS] Failed: {traceback.format_exc()}")
 
 
 async def run_copywriter(supabase: Client):
-    """Copywriter Agent — Cody — full implementation Week 3."""
+    """Cody — full implementation next."""
     task_id = await log_task_start(supabase, "copywriter", "forge", "listing_copy", {"mode": "placeholder"})
     try:
         await update_agent_status(supabase, "copywriter", "running")
@@ -96,7 +93,7 @@ async def run_copywriter(supabase: Client):
 
 
 async def run_publisher(supabase: Client):
-    """Publisher Agent — Pam — full implementation Week 4."""
+    """Pam — full implementation Week 4."""
     task_id = await log_task_start(supabase, "publisher", "forge", "listing_publish", {"mode": "placeholder"})
     try:
         await update_agent_status(supabase, "publisher", "running")
@@ -108,7 +105,7 @@ async def run_publisher(supabase: Client):
 
 
 async def run_treasurer(supabase: Client):
-    """Treasurer Agent — Trevor — full implementation Week 5."""
+    """Trevor — full implementation Week 5."""
     task_id = await log_task_start(supabase, "treasurer", "treasury", "portfolio_review", {"mode": "placeholder"})
     try:
         await update_agent_status(supabase, "treasurer", "running")
