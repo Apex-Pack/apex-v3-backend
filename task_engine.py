@@ -11,6 +11,7 @@ import traceback
 from helpers import log_task_start, log_task_complete, log_task_failed, update_agent_status
 from agents.scout import run_scout as scout_agent
 from agents.analyst import run_analyst as analyst_agent
+from agents.recon import run_recon as recon_agent
 
 # ============================================
 # Guardrail Checker
@@ -47,39 +48,31 @@ async def log_guardrail_event(supabase: Client, agent: str, action: str, rule: s
 # ============================================
 
 async def run_scout(supabase: Client):
-    """Scout Agent — live implementation active."""
+    """Scout Agent — live."""
     try:
         await scout_agent(supabase)
     except Exception as e:
-        error_msg = traceback.format_exc()
-        print(f"[SCOUT] Failed: {error_msg}")
+        print(f"[SCOUT] Failed: {traceback.format_exc()}")
 
 
 async def run_analyst(supabase: Client):
-    """Analyst Agent — Alan — live implementation active."""
+    """Analyst Agent — Alan — live."""
     try:
         await analyst_agent(supabase)
     except Exception as e:
-        error_msg = traceback.format_exc()
-        print(f"[ALAN] Failed: {error_msg}")
+        print(f"[ALAN] Failed: {traceback.format_exc()}")
 
 
 async def run_recon(supabase: Client):
-    """Recon Agent — full implementation Week 2, Day 8."""
-    task_id = await log_task_start(supabase, "recon", "research", "shop_analysis", {"mode": "placeholder"})
+    """Recon Agent — Rico — live."""
     try:
-        await update_agent_status(supabase, "recon", "running")
-        result = {"status": "placeholder", "message": "Recon — full implementation coming Day 8"}
-        await log_task_complete(supabase, task_id, result)
-        await update_agent_status(supabase, "recon", "idle")
-        print(f"[RECON] Placeholder run complete")
+        await recon_agent(supabase)
     except Exception as e:
-        await log_task_failed(supabase, task_id, str(e))
-        await update_agent_status(supabase, "recon", "error")
+        print(f"[RICO] Failed: {traceback.format_exc()}")
 
 
 async def run_designer(supabase: Client):
-    """Designer Agent — full implementation Week 3."""
+    """Designer Agent — Dennis — full implementation Week 3."""
     task_id = await log_task_start(supabase, "designer", "design_lab", "design_generation", {"mode": "placeholder"})
     try:
         await update_agent_status(supabase, "designer", "running")
@@ -91,7 +84,7 @@ async def run_designer(supabase: Client):
 
 
 async def run_copywriter(supabase: Client):
-    """Copywriter Agent — full implementation Week 3."""
+    """Copywriter Agent — Cody — full implementation Week 3."""
     task_id = await log_task_start(supabase, "copywriter", "forge", "listing_copy", {"mode": "placeholder"})
     try:
         await update_agent_status(supabase, "copywriter", "running")
@@ -103,7 +96,7 @@ async def run_copywriter(supabase: Client):
 
 
 async def run_publisher(supabase: Client):
-    """Publisher Agent — full implementation Week 4."""
+    """Publisher Agent — Pam — full implementation Week 4."""
     task_id = await log_task_start(supabase, "publisher", "forge", "listing_publish", {"mode": "placeholder"})
     try:
         await update_agent_status(supabase, "publisher", "running")
@@ -115,7 +108,7 @@ async def run_publisher(supabase: Client):
 
 
 async def run_treasurer(supabase: Client):
-    """Treasurer Agent — full implementation Week 5."""
+    """Treasurer Agent — Trevor — full implementation Week 5."""
     task_id = await log_task_start(supabase, "treasurer", "treasury", "portfolio_review", {"mode": "placeholder"})
     try:
         await update_agent_status(supabase, "treasurer", "running")
