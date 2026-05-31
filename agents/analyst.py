@@ -2,11 +2,6 @@
 # APEX V3 — Analyst Agent (Alan)
 # The House of Packard
 # ============================================
-# Alan's job: Take Scout's raw opportunities
-# and prosecute them hard before validating.
-# Must try to KILL every opportunity first.
-# Only survivors get passed to Recon.
-# ============================================
 
 import os
 import json
@@ -16,49 +11,64 @@ from helpers import log_task_start, log_task_complete, log_task_failed, update_a
 from observability import report_error
 
 async def prosecute_opportunity(client: Anthropic, opportunity: dict) -> dict:
-    """
-    Phase 1 — Prosecution.
-    Alan's job is to find every reason this
-    opportunity will FAIL before validating it.
-    This is confirmation bias protection.
-    """
-    prompt = f"""You are Alan, the Analyst agent for APEX V3. Your job is PROSECUTION — finding every reason this opportunity will fail.
-
-You must be a skeptic. You are looking for problems, not opportunities.
+    prompt = f"""You are Alan, the Analyst agent for APEX V3. Your job is PROSECUTION — finding reasons this opportunity will fail. Be a skeptic but be accurate and evidence-based.
 
 OPPORTUNITY TO PROSECUTE:
 Title: {opportunity.get('title')}
 Niche: {opportunity.get('niche')}
 Specific Angle: {opportunity.get('specific_angle')}
 Scout Score: {opportunity.get('final_score')}/100
-Scout Decision: {opportunity.get('source_data', {}).get('decision')}
 Average Price: ${opportunity.get('source_data', {}).get('avg_price', 0):.2f}
 Estimated Margin: {opportunity.get('source_data', {}).get('estimated_margin_pct', 0)}%
-Key Risk Identified: {opportunity.get('source_data', {}).get('key_risk')}
+Key Risk: {opportunity.get('source_data', {}).get('key_risk')}
 
-PROSECUTION CHECKLIST — Answer each honestly:
-1. Is this niche likely oversaturated with established shops that dominate page 1?
-2. Is the margin realistic after ALL Etsy fees (6.5% transaction + 3% + $0.25 processing + $0.20 listing + Printify base ~$10-14 for shirts)?
-3. Is there any trademark, copyright, or IP risk in this niche?
-4. Is demand seasonal and are we past the peak window?
-5. Is the competition so strong that a new listing would never rank on page 1?
-6. Are there any platform policy risks with this product type?
+ACCURATE COST STRUCTURE — USE THESE EXACT NUMBERS:
+- Printify t-shirt (Bella Canvas 3001): $10.50 base cost
+- Printify mug (11oz ceramic): $7.00 base cost
+- Printify poster (18x24): $9.00 base cost
+- Etsy transaction fee: 6.5% of sale price
+- Etsy payment processing: 3% + $0.25 per transaction
+- Etsy listing fee: $0.20 amortized (negligible per sale)
+- Offsite ads blended rate: 1.8% effective cost
 
-KILL TRIGGERS — Automatically reject if any apply:
-- Estimated real margin after ALL fees drops below 25%
-- Clear trademark or IP risk exists
-- Niche is dominated by shops with 10,000+ sales and 500+ reviews per listing
-- Seasonal product where peak is more than 60 days away or already passed
-- Any Etsy policy violation risk
+REAL MARGIN FORMULA — RUN THIS MATH:
+margin = sale_price - product_cost - (sale_price * 0.065) - (sale_price * 0.03 + 0.25) - (sale_price * 0.018)
+margin_pct = margin / sale_price * 100
+
+EXAMPLE — $29.99 shirt:
+29.99 - 10.50 - 1.95 - 1.15 - 0.54 = $15.85 profit = 52.8% margin — VIABLE
+
+EXAMPLE — $19.99 mug:
+19.99 - 7.00 - 1.30 - 0.85 - 0.36 = $10.48 profit = 52.4% margin — VIABLE
+
+PROSECUTION CHECKLIST — Be specific, not vague:
+1. Run the actual margin math using the average price and accurate costs above
+2. Is competition so entrenched that EVERY page 1 listing has 500+ reviews from shops with 10,000+ sales? (Not just "competitive" — specifically entrenched)
+3. Is there a SPECIFIC named trademark or copyright risk? (Not vague "IP concerns" — name the specific brand/IP)
+4. Is this seasonal AND are we more than 60 days past peak demand?
+5. Is there a specific Etsy policy violation?
+
+KILL TRIGGERS — Only reject if CLEARLY and SPECIFICALLY true:
+- Real margin below 30% using accurate costs above (show your math)
+- NAMED trademark/copyright — specific brand names, characters, celebrities
+- EVERY page 1 listing has 500+ reviews AND shops have 10,000+ sales (not just "saturated")
+- Seasonal product more than 60 days past peak
+
+DO NOT REJECT based on:
+- General "competitive" or "saturated" without page 1 domination evidence
+- Vague IP concerns without naming specific trademarks
+- Pessimistic cost assumptions — use accurate costs above
+- Low price without running actual math first
 
 Respond ONLY with valid JSON:
 {{
   "prosecution_result": "SURVIVED|REJECTED",
-  "concerns_found": ["list of specific concerns, even if survived"],
-  "kill_triggers_hit": ["list any kill triggers that fired, empty if none"],
+  "concerns_found": ["specific concerns with evidence"],
+  "kill_triggers_hit": ["specific triggers with evidence, empty if none"],
   "real_margin_estimate": 0.0,
+  "margin_calculation": "show math: $X price - $Y cost - $Z fees = $W profit = X%",
   "confidence_in_rejection": "high|medium|low",
-  "prosecution_reasoning": "2-3 sentence summary of your prosecution findings"
+  "prosecution_reasoning": "2-3 sentences with specific evidence, not general statements"
 }}"""
 
     message = client.messages.create(
@@ -87,13 +97,7 @@ Respond ONLY with valid JSON:
 
 
 async def validate_opportunity(client: Anthropic, opportunity: dict, prosecution: dict) -> dict:
-    """
-    Phase 2 — Validation.
-    Only runs if prosecution was survived.
-    Confirms the opportunity is real and
-    attaches a risk profile.
-    """
-    prompt = f"""You are Alan, the Analyst agent for APEX V3. This opportunity survived prosecution. Now validate it properly.
+    prompt = f"""You are Alan, the Analyst agent for APEX V3. This opportunity survived prosecution. Now validate it.
 
 OPPORTUNITY:
 Title: {opportunity.get('title')}
@@ -102,17 +106,17 @@ Specific Angle: {opportunity.get('specific_angle')}
 Scout Score: {opportunity.get('final_score')}/100
 Average Price: ${opportunity.get('source_data', {}).get('avg_price', 0):.2f}
 
-PROSECUTION FINDINGS (survived but had these concerns):
+PROSECUTION FINDINGS (survived with these concerns):
 {json.dumps(prosecution.get('concerns_found', []), indent=2)}
 
-Prosecution reasoning: {prosecution.get('prosecution_reasoning')}
+Margin calculation: {prosecution.get('margin_calculation')}
 Real margin estimate: {prosecution.get('real_margin_estimate')}%
 
 VALIDATION TASKS:
-1. Confirm demand is real — is there genuine buyer intent for this specific angle?
-2. Confirm margin is viable — at the average price, after all fees, is 30%+ achievable?
-3. Confirm new entrant can rank — is there evidence a new shop could appear on page 1?
-4. Assign risk profile — how risky is this opportunity overall?
+1. Confirm demand is real — genuine buyer intent for this specific angle?
+2. Confirm margin is viable — 30%+ confirmed using accurate costs?
+3. Confirm new entrant can rank — is there at least ONE page 1 listing with under 100 reviews, OR at least one shop under 1 year old on page 1?
+4. Assign overall risk level
 
 Respond ONLY with valid JSON:
 {{
@@ -128,11 +132,7 @@ Respond ONLY with valid JSON:
     "margin_risk": "low|medium|high",
     "platform_risk": "low|medium|high"
   }},
-  "top_3_failure_reasons": [
-    "reason 1",
-    "reason 2",
-    "reason 3"
-  ],
+  "top_3_failure_reasons": ["reason 1", "reason 2", "reason 3"],
   "recommended_entry_strategy": "one sentence on how to win in this niche",
   "tokens_used": 0,
   "cost_usd": 0.0
@@ -164,14 +164,6 @@ Respond ONLY with valid JSON:
 
 
 async def run_analyst(supabase):
-    """
-    Alan's full routine:
-    1. Pull all raw opportunities from Supabase
-    2. Prosecute each one — try to kill it
-    3. Validate survivors
-    4. Update opportunity records with verdicts
-    5. Flag validated ones for Recon
-    """
     task_id = await log_task_start(
         supabase, "analyst", "research",
         "demand_validation",
@@ -185,7 +177,15 @@ async def run_analyst(supabase):
         anthropic_key = os.getenv("ANTHROPIC_API_KEY")
         client = Anthropic(api_key=anthropic_key)
 
-        # Pull all raw opportunities Scout found
+        # Reset rejected opportunities so Alan can re-evaluate with better calibration
+        supabase.table("opportunities").update({
+            "status": "raw"
+        }).eq("status", "rejected").execute()
+
+        supabase.table("opportunities").update({
+            "status": "raw"
+        }).eq("status", "analyzing").execute()
+
         response = supabase.table("opportunities")\
             .select("*")\
             .eq("status", "raw")\
@@ -193,7 +193,7 @@ async def run_analyst(supabase):
             .execute()
 
         opportunities = response.data
-        print(f"[ALAN] {len(opportunities)} raw opportunities to prosecute")
+        print(f"[ALAN] {len(opportunities)} opportunities to prosecute")
 
         prosecuted = 0
         survived = 0
@@ -206,7 +206,6 @@ async def run_analyst(supabase):
             print(f"[ALAN] Prosecuting: '{opp.get('title')}' (Score: {opp.get('final_score')})")
 
             try:
-                # Phase 1 — Prosecution
                 supabase.table("opportunities").update({
                     "status": "analyzing"
                 }).eq("id", opp["id"]).execute()
@@ -223,22 +222,21 @@ async def run_analyst(supabase):
                 prosecution_result = prosecution.get("prosecution_result")
 
                 if prosecution_result == "REJECTED":
-                    # Killed in prosecution
                     rejected += 1
                     supabase.table("opportunities").update({
                         "status": "rejected",
                         "prosecution_result": "rejected",
                         "prosecution_concerns": prosecution.get("concerns_found", []),
                     }).eq("id", opp["id"]).execute()
-                    print(f"[ALAN] ✗ KILLED in prosecution: '{opp.get('title')}'")
+                    print(f"[ALAN] ✗ KILLED: '{opp.get('title')}'")
+                    print(f"[ALAN]   Margin: {prosecution.get('margin_calculation')}")
                     print(f"[ALAN]   Reason: {prosecution.get('prosecution_reasoning')}")
                     continue
 
-                # Survived prosecution
                 survived += 1
-                print(f"[ALAN] ✓ Survived prosecution: '{opp.get('title')}'")
+                print(f"[ALAN] ✓ Survived: '{opp.get('title')}' — Margin: {prosecution.get('real_margin_estimate')}%")
+                print(f"[ALAN]   Math: {prosecution.get('margin_calculation')}")
 
-                # Phase 2 — Validation
                 validation = await validate_opportunity(client, opp, prosecution)
 
                 if not validation:
@@ -259,7 +257,6 @@ async def run_analyst(supabase):
                     }).eq("id", opp["id"]).execute()
                     print(f"[ALAN] ✗ Rejected in validation: '{opp.get('title')}'")
                 else:
-                    # Validated — ready for Recon
                     validated += 1
                     adjusted_score = validation.get("adjusted_score", opp.get("final_score", 0))
 
@@ -282,16 +279,15 @@ async def run_analyst(supabase):
                         }
                     }).eq("id", opp["id"]).execute()
 
-                    print(f"[ALAN] ✓ VALIDATED: '{opp.get('title')}' — Adjusted Score: {adjusted_score}")
+                    print(f"[ALAN] ✓ VALIDATED: '{opp.get('title')}' — Score: {adjusted_score}")
                     print(f"[ALAN]   Strategy: {validation.get('recommended_entry_strategy')}")
 
-                # Budget check
                 if total_cost >= 6.0:
-                    print(f"[ALAN] Budget limit approaching (${total_cost:.2f}) — stopping early")
+                    print(f"[ALAN] Budget limit approaching (${total_cost:.2f}) — stopping")
                     break
 
             except Exception as e:
-                print(f"[ALAN] Error processing '{opp.get('title')}': {str(e)}")
+                print(f"[ALAN] Error: '{opp.get('title')}': {str(e)}")
                 supabase.table("opportunities").update({
                     "status": "raw"
                 }).eq("id", opp["id"]).execute()
