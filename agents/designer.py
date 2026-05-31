@@ -2,30 +2,22 @@
 # APEX V3 — Designer Agent (Dennis)
 # The House of Packard
 # ============================================
-# Dennis's job: Take Rico's playbooks and
-# generate real product designs using the
-# Gemini image generation API. Produces
-# 2-3 design variants per opportunity and
-# stores assets in Cloudflare R2.
-# ============================================
 
 import os
 import json
 import httpx
-import base64
 from anthropic import Anthropic
 from datetime import datetime, timezone
 from helpers import log_task_start, log_task_complete, log_task_failed, update_agent_status
 from observability import report_error
 
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta"
+
 
 async def generate_design_prompt(client: Anthropic, opportunity: dict, playbook: dict, variant: int) -> str:
     """
     Uses Claude to craft the perfect image generation
     prompt based on Rico's playbook.
-    Dennis thinks before he draws.
     """
     design_playbook = playbook.get("design_playbook", {})
     copy_playbook = playbook.get("copy_playbook", {})
@@ -37,7 +29,7 @@ async def generate_design_prompt(client: Anthropic, opportunity: dict, playbook:
         3: "simplified version — cleaner, more minimal than variant 1"
     }
 
-    prompt = f"""You are Dennis, the Designer agent for APEX V3. Your job is to write a precise image generation prompt for a print-on-demand product design.
+    prompt = f"""You are Dennis, the Designer agent for APEX V3. Write a precise image generation prompt for a print-on-demand product design.
 
 OPPORTUNITY:
 Title: {opportunity.get('title')}
@@ -52,26 +44,24 @@ Complexity level: {design_playbook.get('complexity_level')}
 AI generation approach: {design_playbook.get('ai_generation_approach')}
 Design dos: {', '.join(design_playbook.get('design_dos', []))}
 Design donts: {', '.join(design_playbook.get('design_donts', []))}
-
-Tone from copy playbook: {copy_playbook.get('tone')}
+Tone: {copy_playbook.get('tone')}
 
 VARIANT {variant}: {variant_directions.get(variant, 'alternative approach')}
 
-Write a precise Gemini image generation prompt for this POD design. The prompt must:
-1. Specify "transparent background" for apparel designs
+Write a precise image generation prompt. It must:
+1. Specify "white background" for clean POD results
 2. Specify "high contrast" for thumbnail visibility
-3. Include "vector style" or "flat design" for clean print results
-4. Describe the specific visual elements, not just the concept
-5. Include color specifications
-6. Be under 200 words
+3. Include "vector style flat design" for clean print results
+4. Describe specific visual elements, colors, composition
+5. Be under 150 words
 
 CRITICAL RULES:
-- NO trademarked brands, logos, or copyrighted characters
+- NO trademarked brands, logos, or characters
 - NO photorealistic human faces
-- NO text in the image (text will be added separately)
-- Designs must be print-ready at 300 DPI
+- NO text or words in the image
+- Designs must work at print resolution
 
-Respond with ONLY the image generation prompt — no preamble, no explanation, just the prompt itself."""
+Respond with ONLY the image prompt — no preamble, no explanation."""
 
     message = client.messages.create(
         model="claude-sonnet-4-20250514",
@@ -79,19 +69,20 @@ Respond with ONLY the image generation prompt — no preamble, no explanation, j
         messages=[{"role": "user", "content": prompt}]
     )
 
-    return message.content[0].text.strip()
+    tokens_used = message.usage.input_tokens + message.usage.output_tokens
+    cost = (message.usage.input_tokens * 0.000003) + (message.usage.output_tokens * 0.000015)
+    return message.content[0].text.strip(), tokens_used, cost
 
 
 async def generate_image(prompt: str) -> dict:
     """
-    Calls the Gemini image generation API with
-    the prompt Dennis crafted.
-    Returns the image data and metadata.
+    Calls the Gemini image generation API.
+    Returns image data and metadata.
     """
     try:
-        async with httpx.AsyncClient(timeout=60.0) as client:
+        async with httpx.AsyncClient(timeout=90.0) as client:
             response = await client.post(
-                f"{GEMINI_API_BASE}/models/gemini-2.0-flash-preview-image-generation:generateContent",
+                f"{GEMINI_API_BASE}/models/gemini-2.5-flash-image:generateContent",
                 headers={
                     "Content-Type": "application/json",
                     "x-goog-api-key": os.getenv("GEMINI_API_KEY")
@@ -108,7 +99,6 @@ async def generate_image(prompt: str) -> dict:
 
             if response.status_code == 200:
                 data = response.json()
-                # Extract image from response
                 candidates = data.get("candidates", [])
                 if candidates:
                     parts = candidates[0].get("content", {}).get("parts", [])
@@ -119,24 +109,23 @@ async def generate_image(prompt: str) -> dict:
                                 "image_data": part["inlineData"]["data"],
                                 "mime_type": part["inlineData"]["mimeType"],
                             }
-                return {"success": False, "error": "No image in response"}
+                return {"success": False, "error": "No image in response", "raw": str(data)[:200]}
             else:
-                print(f"[DENNIS] Gemini API error: {response.status_code} — {response.text[:200]}")
-                return {"success": False, "error": f"API error {response.status_code}"}
+                error_text = response.text[:300]
+                print(f"[DENNIS] Gemini API error: {response.status_code} — {error_text}")
+                return {"success": False, "error": f"API error {response.status_code}: {error_text}"}
 
     except Exception as e:
         print(f"[DENNIS] Image generation error: {str(e)}")
         return {"success": False, "error": str(e)}
 
 
-async def save_design_to_supabase(supabase, opportunity_id: str, variant: int, image_data: str, mime_type: str, prompt: str, product_type: str) -> dict:
+async def save_design(supabase, opportunity_id: str, variant: int, image_data: str, mime_type: str, prompt: str, product_type: str) -> dict:
     """
-    Saves design metadata to Supabase products table.
-    Stores the image as base64 in the design_assets field
-    until Cloudflare R2 is connected.
+    Saves design to Supabase products table.
+    Stores image as base64 in design_assets.
     """
     try:
-        # Create product record
         result = supabase.table("products").insert({
             "opportunity_id": opportunity_id,
             "title": f"Design Variant {variant}",
@@ -147,7 +136,7 @@ async def save_design_to_supabase(supabase, opportunity_id: str, variant: int, i
                 "variant": variant,
                 "prompt_used": prompt,
                 "mime_type": mime_type,
-                "image_data_preview": image_data[:100] + "...",
+                "image_data": image_data,
                 "has_image": True,
                 "generated_at": datetime.now(timezone.utc).isoformat()
             }
@@ -165,11 +154,10 @@ async def save_design_to_supabase(supabase, opportunity_id: str, variant: int, i
 async def run_designer(supabase):
     """
     Dennis's full routine:
-    1. Pull opportunities with status 'in_production'
-    2. Read Rico's playbook for each
-    3. Generate 2-3 design variants using Gemini
+    1. Pull opportunities with playbooks
+    2. Generate design prompts using Claude
+    3. Generate images using Gemini
     4. Save designs to products table
-    5. Update opportunity status
     """
     task_id = await log_task_start(
         supabase, "designer", "design_lab",
@@ -196,6 +184,19 @@ async def run_designer(supabase):
         opportunities = response.data
         print(f"[DENNIS] {len(opportunities)} opportunities ready for design")
 
+        if not opportunities:
+            print("[DENNIS] No opportunities ready — check that Rico has run first")
+            result = {
+                "opportunities_processed": 0,
+                "designs_created": 0,
+                "total_cost_usd": 0,
+                "total_tokens": 0,
+                "timestamp": datetime.now(timezone.utc).isoformat()
+            }
+            await log_task_complete(supabase, task_id, result)
+            await update_agent_status(supabase, "designer", "idle")
+            return result
+
         designs_created = 0
         total_cost = 0.0
         total_tokens = 0
@@ -215,18 +216,17 @@ async def run_designer(supabase):
                 print(f"[DENNIS] Generating variant {variant}...")
 
                 # Generate prompt using Claude
-                design_prompt = await generate_design_prompt(client, opp, playbook, variant)
-                total_tokens += 150
-                total_cost += 0.002
+                design_prompt, tokens, cost = await generate_design_prompt(client, opp, playbook, variant)
+                total_tokens += tokens
+                total_cost += cost
 
-                print(f"[DENNIS] Prompt: {design_prompt[:100]}...")
+                print(f"[DENNIS] Prompt: {design_prompt[:120]}...")
 
                 # Generate image using Gemini
                 image_result = await generate_image(design_prompt)
 
                 if image_result.get("success"):
-                    # Save to products table
-                    save_result = await save_design_to_supabase(
+                    save_result = await save_design(
                         supabase,
                         opp["id"],
                         variant,
@@ -239,18 +239,17 @@ async def run_designer(supabase):
                     if save_result.get("success"):
                         variants_created += 1
                         designs_created += 1
-                        print(f"[DENNIS] ✓ Variant {variant} created — Product ID: {save_result.get('product_id')}")
+                        print(f"[DENNIS] ✓ Variant {variant} saved — Product ID: {save_result.get('product_id')}")
                     else:
-                        print(f"[DENNIS] ✗ Failed to save variant {variant}")
+                        print(f"[DENNIS] ✗ Save failed for variant {variant}: {save_result.get('error')}")
                 else:
-                    print(f"[DENNIS] ✗ Image generation failed for variant {variant}: {image_result.get('error')}")
+                    print(f"[DENNIS] ✗ Image generation failed: {image_result.get('error')}")
 
             if variants_created > 0:
                 print(f"[DENNIS] ✓ '{opp.get('title')}' — {variants_created} variants created")
             else:
                 print(f"[DENNIS] ✗ No variants created for '{opp.get('title')}'")
 
-            # Budget check
             if total_cost >= 3.0:
                 print(f"[DENNIS] Budget limit approaching (${total_cost:.2f}) — stopping")
                 break
