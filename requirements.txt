@@ -9,3 +9,5 @@ pydantic==2.7.1
 langsmith==0.1.77
 sentry-sdk[fastapi]==1.45.0
 google-generativeai==0.8.3
+google-api-python-client==2.111.0
+google-auth==2.27.0
