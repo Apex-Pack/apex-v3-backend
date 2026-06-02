@@ -239,8 +239,6 @@ async def create_processing_profile():
     Creates a made-to-order readiness state definition for BenOutsideCo.
     Run this ONCE before Pam publishes. Returns the readiness_state_id
     to add as ETSY_READINESS_STATE_ID in Railway.
-
-    Fixed: uses correct Etsy V3 endpoint — readiness-state-definitions.
     """
     try:
         from token_manager import get_etsy_headers
@@ -249,24 +247,21 @@ async def create_processing_profile():
 
         async with httpx.AsyncClient() as client:
             response = await client.post(
-                # FIXED: correct Etsy V3 endpoint
                 f"https://openapi.etsy.com/v3/application/shops/{shop_id}/readiness-state-definitions",
                 headers=headers,
                 json={
                     "readiness_state": "made_to_order",
                     "min_processing_time": 3,
                     "max_processing_time": 7,
-                    "processing_time_unit": "business_days",
+                    "processing_time_unit": "days",  # FIXED: was "business_days"
                 },
                 timeout=30.0
             )
 
-        # Log the raw response so we can debug if needed
         print(f"[APEX] Readiness state response: {response.status_code} — {response.text[:500]}")
 
         if response.status_code in [200, 201]:
             data = response.json()
-            # Etsy may return this under different field names — we check all of them
             profile_id = (
                 data.get("readiness_state_id")
                 or data.get("shop_readiness_state_id")
@@ -289,7 +284,6 @@ async def create_processing_profile():
                 "next_step": f"Add ETSY_READINESS_STATE_ID={profile_id} to Railway, then hit /publisher/run"
             }
 
-        # If it failed, return the full error so we know exactly what Etsy said
         return {
             "error": f"Etsy returned {response.status_code}",
             "details": response.text[:500],
