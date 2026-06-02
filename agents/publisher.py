@@ -231,21 +231,25 @@ async def create_printful_product(listing: dict, product: dict, printful_product
 
 
 async def publish_to_etsy(supabase, listing: dict, shop_id: str) -> dict:
-    """Creates an active listing on Etsy with shipping profile."""
+    """Creates an active listing on Etsy with shipping and processing profiles."""
     try:
         headers = await get_etsy_headers(supabase)
         tags = listing.get("tags", [])[:13]
         price = float(listing.get("price", 24.99))
 
-        # Debug — print what we're reading
+        # Load shipping profile ID
         raw_shipping_id = os.getenv("ETSY_SHIPPING_PROFILE_ID")
-        print(f"[PAM] Raw shipping profile env var: '{raw_shipping_id}'")
-
+        print(f"[PAM] Shipping profile ID: '{raw_shipping_id}'")
         if not raw_shipping_id or raw_shipping_id == "0":
             return {"success": False, "error": "ETSY_SHIPPING_PROFILE_ID not configured"}
-
         shipping_profile_id = int(raw_shipping_id)
-        print(f"[PAM] Using shipping profile ID: {shipping_profile_id}")
+
+        # Load readiness state ID
+        raw_readiness_id = os.getenv("ETSY_READINESS_STATE_ID")
+        print(f"[PAM] Readiness state ID: '{raw_readiness_id}'")
+        if not raw_readiness_id or raw_readiness_id == "0":
+            return {"success": False, "error": "ETSY_READINESS_STATE_ID not configured"}
+        readiness_state_id = int(raw_readiness_id)
 
         async with httpx.AsyncClient() as client:
             response = await client.post(
@@ -263,6 +267,7 @@ async def publish_to_etsy(supabase, listing: dict, shop_id: str) -> dict:
                     "state": "active",
                     "type": "physical",
                     "shipping_profile_id": shipping_profile_id,
+                    "readiness_state_id": readiness_state_id,
                 },
                 timeout=30.0
             )
