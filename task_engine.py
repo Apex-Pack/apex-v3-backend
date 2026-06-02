@@ -106,7 +106,8 @@ async def run_daily_pipeline(supabase: Client):
     await run_recon(supabase)
     await run_designer(supabase)
     await run_copywriter(supabase)
-    await run_publisher(supabase)
+    # PAM PAUSED — Dennis being rebuilt for quality before publishing resumes
+    # await run_publisher(supabase)
     await run_treasurer(supabase)
 
     print(f"\n[APEX] Daily pipeline complete at {datetime.now(timezone.utc)}\n")
