@@ -187,20 +187,15 @@ async def get_shipping_profiles():
             )
             if response.status_code == 200:
                 return response.json()
-            return {
-                "error": f"Etsy API returned {response.status_code}",
-                "details": response.text[:300]
-            }
+            return {"error": f"Etsy API returned {response.status_code}",
+                    "details": response.text[:300]}
     except Exception as e:
         return {"error": str(e)}
 
 
 @app.get("/etsy/create-shipping-profile")
 async def create_shipping_profile():
-    """
-    Creates a basic shipping profile for BenOutsideCo.
-    Run this once before Pam publishes.
-    """
+    """Creates a basic shipping profile for BenOutsideCo."""
     try:
         from token_manager import get_etsy_headers
         headers = await get_etsy_headers(supabase)
@@ -232,10 +227,44 @@ async def create_shipping_profile():
                     "shipping_profile_id": profile_id,
                     "message": f"Add ETSY_SHIPPING_PROFILE_ID={profile_id} to Railway variables"
                 }
-            return {
-                "error": f"Failed: {response.status_code}",
-                "details": response.text[:300]
-            }
+            return {"error": f"Failed: {response.status_code}",
+                    "details": response.text[:300]}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.get("/etsy/create-processing-profile")
+async def create_processing_profile():
+    """
+    Creates a made-to-order processing profile for BenOutsideCo.
+    Run this once before Pam publishes.
+    """
+    try:
+        from token_manager import get_etsy_headers
+        headers = await get_etsy_headers(supabase)
+        shop_id = "50046147"
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                f"https://openapi.etsy.com/v3/application/shops/{shop_id}/processing-profiles",
+                headers=headers,
+                json={
+                    "readiness_state": "made_to_order",
+                    "min_processing_time": 3,
+                    "max_processing_time": 7,
+                    "processing_time_unit": "business_days",
+                },
+                timeout=30.0
+            )
+            if response.status_code in [200, 201]:
+                data = response.json()
+                profile_id = data.get("readiness_state_id")
+                return {
+                    "success": True,
+                    "readiness_state_id": profile_id,
+                    "message": f"Add ETSY_READINESS_STATE_ID={profile_id} to Railway variables"
+                }
+            return {"error": f"Failed: {response.status_code}",
+                    "details": response.text[:300]}
     except Exception as e:
         return {"error": str(e)}
 
