@@ -10,6 +10,7 @@ from dotenv import load_dotenv
 from supabase import create_client, Client
 from task_engine import create_scheduler, run_daily_pipeline
 from observability import init_sentry, init_langsmith, get_observability_status
+from pydantic import BaseModel
 import os
 import httpx
 import secrets
@@ -39,6 +40,14 @@ supabase: Client = create_client(
 scheduler = create_scheduler(supabase)
 oauth_state_store = {}
 
+
+class IdeaSubmission(BaseModel):
+    concept: str
+    shop: str = "benoutside"
+    notes: str = ""
+    priority: bool = False
+
+
 @app.on_event("startup")
 async def startup_event():
     init_sentry()
@@ -47,10 +56,12 @@ async def startup_event():
     print(f"[APEX] System online at {datetime.now(timezone.utc)}")
     print(f"[APEX] Scheduler started — daily pipeline runs at 06:00 UTC")
 
+
 @app.on_event("shutdown")
 async def shutdown_event():
     scheduler.shutdown()
     print(f"[APEX] System offline at {datetime.now(timezone.utc)}")
+
 
 @app.get("/")
 def root():
@@ -61,6 +72,7 @@ def root():
         "timestamp": datetime.now(timezone.utc).isoformat()
     }
 
+
 @app.get("/health")
 def health_check():
     try:
@@ -68,10 +80,8 @@ def health_check():
             "agent": "system",
             "action": "health_check",
             "success": True,
-            "details": {
-                "message": "APEX V3 backend is online",
-                "timestamp": datetime.now(timezone.utc).isoformat()
-            }
+            "details": {"message": "APEX V3 backend is online",
+                        "timestamp": datetime.now(timezone.utc).isoformat()}
         }).execute()
         return {
             "status": "healthy",
@@ -83,7 +93,9 @@ def health_check():
             "timestamp": datetime.now(timezone.utc).isoformat()
         }
     except Exception as e:
-        return {"status": "unhealthy", "database": "error", "error": str(e), "timestamp": datetime.now(timezone.utc).isoformat()}
+        return {"status": "unhealthy", "error": str(e),
+                "timestamp": datetime.now(timezone.utc).isoformat()}
+
 
 @app.get("/etsy/auth")
 async def etsy_auth():
@@ -91,12 +103,18 @@ async def etsy_auth():
     api_key = os.getenv("ETSY_API_KEY")
     callback_url = f"{os.getenv('RAILWAY_URL', 'https://web-production-8056d.up.railway.app')}/etsy/callback"
     code_verifier = secrets.token_urlsafe(64)
-    code_challenge = base64.urlsafe_b64encode(hashlib.sha256(code_verifier.encode()).digest()).rstrip(b'=').decode()
+    code_challenge = base64.urlsafe_b64encode(
+        hashlib.sha256(code_verifier.encode()).digest()).rstrip(b'=').decode()
     state = secrets.token_urlsafe(32)
     oauth_state_store[state] = code_verifier
-    scopes = " ".join(["listings_r","listings_w","listings_d","shops_r","shops_w","transactions_r","billing_r"])
-    auth_url = f"https://www.etsy.com/oauth/connect?response_type=code&redirect_uri={callback_url}&scope={scopes}&client_id={api_key}&state={state}&code_challenge={code_challenge}&code_challenge_method=S256"
+    scopes = " ".join(["listings_r", "listings_w", "listings_d",
+                       "shops_r", "shops_w", "transactions_r", "billing_r"])
+    auth_url = (f"https://www.etsy.com/oauth/connect?response_type=code"
+                f"&redirect_uri={callback_url}&scope={scopes}"
+                f"&client_id={api_key}&state={state}"
+                f"&code_challenge={code_challenge}&code_challenge_method=S256")
     return RedirectResponse(url=auth_url)
+
 
 @app.get("/etsy/auth/debug")
 async def etsy_auth_debug():
@@ -104,11 +122,18 @@ async def etsy_auth_debug():
     api_key = os.getenv("ETSY_API_KEY")
     callback_url = f"{os.getenv('RAILWAY_URL', 'https://web-production-8056d.up.railway.app')}/etsy/callback"
     code_verifier = secrets.token_urlsafe(64)
-    code_challenge = base64.urlsafe_b64encode(hashlib.sha256(code_verifier.encode()).digest()).rstrip(b'=').decode()
+    code_challenge = base64.urlsafe_b64encode(
+        hashlib.sha256(code_verifier.encode()).digest()).rstrip(b'=').decode()
     state = secrets.token_urlsafe(32)
-    scopes = " ".join(["listings_r","listings_w","listings_d","shops_r","shops_w","transactions_r","billing_r"])
-    auth_url = f"https://www.etsy.com/oauth/connect?response_type=code&redirect_uri={callback_url}&scope={scopes}&client_id={api_key}&state={state}&code_challenge={code_challenge}&code_challenge_method=S256"
-    return {"callback_url_being_sent": callback_url, "api_key_loaded": bool(api_key), "full_auth_url": auth_url}
+    scopes = " ".join(["listings_r", "listings_w", "listings_d",
+                       "shops_r", "shops_w", "transactions_r", "billing_r"])
+    auth_url = (f"https://www.etsy.com/oauth/connect?response_type=code"
+                f"&redirect_uri={callback_url}&scope={scopes}"
+                f"&client_id={api_key}&state={state}"
+                f"&code_challenge={code_challenge}&code_challenge_method=S256")
+    return {"callback_url_being_sent": callback_url,
+            "api_key_loaded": bool(api_key), "full_auth_url": auth_url}
+
 
 @app.get("/etsy/callback")
 async def etsy_callback(code: str = None, state: str = None, error: str = None):
@@ -124,16 +149,19 @@ async def etsy_callback(code: str = None, state: str = None, error: str = None):
     async with httpx.AsyncClient() as client:
         response = await client.post(
             "https://api.etsy.com/v3/public/oauth/token",
-            data={"grant_type": "authorization_code", "client_id": api_key, "redirect_uri": callback_url, "code": code, "code_verifier": code_verifier},
+            data={"grant_type": "authorization_code", "client_id": api_key,
+                  "redirect_uri": callback_url, "code": code,
+                  "code_verifier": code_verifier},
             headers={"Content-Type": "application/x-www-form-urlencoded"}
         )
     if response.status_code != 200:
-        return {"error": "Token exchange failed", "status_code": response.status_code, "details": response.text}
+        return {"error": "Token exchange failed", "details": response.text}
     token_data = response.json()
     oauth_state_store.pop(state, None)
     supabase.table("audit_log").insert({
         "agent": "system", "action": "etsy_oauth_complete", "success": True,
-        "details": {"expires_in": token_data.get("expires_in"), "timestamp": datetime.now(timezone.utc).isoformat()}
+        "details": {"expires_in": token_data.get("expires_in"),
+                    "timestamp": datetime.now(timezone.utc).isoformat()}
     }).execute()
     return {
         "status": "SUCCESS — COPY THESE VALUES TO RAILWAY",
@@ -143,6 +171,7 @@ async def etsy_callback(code: str = None, state: str = None, error: str = None):
         "timestamp": datetime.now(timezone.utc).isoformat()
     }
 
+
 @app.get("/agents")
 def get_agents():
     try:
@@ -151,21 +180,26 @@ def get_agents():
     except Exception as e:
         return {"error": str(e)}
 
+
 @app.get("/opportunities")
 def get_opportunities():
     try:
-        response = supabase.table("opportunities").select("*").order("final_score", desc=True).execute()
+        response = supabase.table("opportunities").select("*")\
+            .order("final_score", desc=True).execute()
         return {"opportunities": response.data, "count": len(response.data)}
     except Exception as e:
         return {"error": str(e)}
 
+
 @app.get("/tasks/recent")
 def get_recent_tasks():
     try:
-        response = supabase.table("tasks").select("*").order("created_at", desc=True).limit(50).execute()
+        response = supabase.table("tasks").select("*")\
+            .order("created_at", desc=True).limit(50).execute()
         return {"tasks": response.data, "count": len(response.data)}
     except Exception as e:
         return {"error": str(e)}
+
 
 @app.get("/treasury/summary")
 def get_treasury_summary():
@@ -183,68 +217,181 @@ def get_treasury_summary():
     except Exception as e:
         return {"error": str(e)}
 
+
+@app.get("/listings")
+def get_listings():
+    try:
+        response = supabase.table("listings").select("*")\
+            .order("created_at", desc=True).execute()
+        return {"listings": response.data, "count": len(response.data)}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+# ============================================
+# CEO Idea Drop
+# ============================================
+
+@app.post("/ideas/submit")
+async def submit_idea(idea: IdeaSubmission):
+    """
+    CEO submits a product idea directly to the pipeline.
+    Creates an opportunity record tagged as ceo_idea.
+    Alan picks it up next run and prosecutes it.
+    Priority ideas jump to front of publishing queue.
+    """
+    try:
+        result = supabase.table("opportunities").insert({
+            "title": idea.concept[:200],
+            "niche": "CEO Idea",
+            "specific_angle": idea.concept,
+            "status": "raw",
+            "shop": idea.shop,
+            "final_score": 90 if idea.priority else 75,
+            "source_data": {
+                "source": "ceo_idea",
+                "notes": idea.notes,
+                "priority": idea.priority,
+                "submitted_at": datetime.now(timezone.utc).isoformat()
+            },
+            "demand_score": 15,
+            "competition_score": 15,
+            "margin_score": 15,
+            "design_score": 15,
+            "legal_score": 15,
+        }).execute()
+
+        idea_id = result.data[0]["id"] if result.data else None
+
+        supabase.table("audit_log").insert({
+            "agent": "system",
+            "action": "ceo_idea_submitted",
+            "success": True,
+            "details": {
+                "concept": idea.concept,
+                "shop": idea.shop,
+                "priority": idea.priority,
+                "opportunity_id": idea_id,
+                "timestamp": datetime.now(timezone.utc).isoformat()
+            }
+        }).execute()
+
+        return {
+            "status": "received",
+            "message": f"Idea submitted to pipeline. Alan will prosecute it on the next run.",
+            "opportunity_id": idea_id,
+            "shop": idea.shop,
+            "priority": idea.priority,
+            "next_step": "Alan → Rico → Dennis → Cody → Pam",
+            "timestamp": datetime.now(timezone.utc).isoformat()
+        }
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.get("/ideas")
+def get_ideas():
+    """Returns all CEO-submitted ideas and their pipeline status."""
+    try:
+        response = supabase.table("opportunities").select("*")\
+            .eq("niche", "CEO Idea")\
+            .order("created_at", desc=True).execute()
+        return {"ideas": response.data, "count": len(response.data)}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+# ============================================
+# Agent Debug Endpoints
+# ============================================
+
 @app.get("/scout/run")
 async def run_scout_debug():
     try:
         from agents.scout import run_scout
         result = await run_scout(supabase)
-        return {"status": "completed", "result": result, "timestamp": datetime.now(timezone.utc).isoformat()}
+        return {"status": "completed", "result": result,
+                "timestamp": datetime.now(timezone.utc).isoformat()}
     except Exception as e:
         import traceback
         return {"status": "error", "error": str(e), "traceback": traceback.format_exc()}
+
 
 @app.get("/analyst/run")
 async def run_analyst_debug():
     try:
         from agents.analyst import run_analyst
         result = await run_analyst(supabase)
-        return {"status": "completed", "result": result, "timestamp": datetime.now(timezone.utc).isoformat()}
+        return {"status": "completed", "result": result,
+                "timestamp": datetime.now(timezone.utc).isoformat()}
     except Exception as e:
         import traceback
         return {"status": "error", "error": str(e), "traceback": traceback.format_exc()}
+
 
 @app.get("/recon/run")
 async def run_recon_debug():
     try:
         from agents.recon import run_recon
         result = await run_recon(supabase)
-        return {"status": "completed", "result": result, "timestamp": datetime.now(timezone.utc).isoformat()}
+        return {"status": "completed", "result": result,
+                "timestamp": datetime.now(timezone.utc).isoformat()}
     except Exception as e:
         import traceback
         return {"status": "error", "error": str(e), "traceback": traceback.format_exc()}
+
 
 @app.get("/designer/run")
 async def run_designer_debug():
     try:
         from agents.designer import run_designer
         result = await run_designer(supabase)
-        return {"status": "completed", "result": result, "timestamp": datetime.now(timezone.utc).isoformat()}
+        return {"status": "completed", "result": result,
+                "timestamp": datetime.now(timezone.utc).isoformat()}
     except Exception as e:
         import traceback
         return {"status": "error", "error": str(e), "traceback": traceback.format_exc()}
+
 
 @app.get("/copywriter/run")
 async def run_copywriter_debug():
     try:
         from agents.copywriter import run_copywriter
         result = await run_copywriter(supabase)
-        return {"status": "completed", "result": result, "timestamp": datetime.now(timezone.utc).isoformat()}
+        return {"status": "completed", "result": result,
+                "timestamp": datetime.now(timezone.utc).isoformat()}
     except Exception as e:
         import traceback
         return {"status": "error", "error": str(e), "traceback": traceback.format_exc()}
+
+
+@app.get("/publisher/run")
+async def run_publisher_debug():
+    try:
+        from agents.publisher import run_publisher
+        result = await run_publisher(supabase)
+        return {"status": "completed", "result": result,
+                "timestamp": datetime.now(timezone.utc).isoformat()}
+    except Exception as e:
+        import traceback
+        return {"status": "error", "error": str(e), "traceback": traceback.format_exc()}
+
 
 @app.get("/pipeline/run")
 async def trigger_pipeline_get():
     try:
         await run_daily_pipeline(supabase)
-        return {"status": "completed", "message": "Daily pipeline completed successfully", "timestamp": datetime.now(timezone.utc).isoformat()}
+        return {"status": "completed", "message": "Pipeline complete",
+                "timestamp": datetime.now(timezone.utc).isoformat()}
     except Exception as e:
         return {"error": str(e)}
+
 
 @app.post("/pipeline/run")
 async def trigger_pipeline():
     try:
         await run_daily_pipeline(supabase)
-        return {"status": "completed", "message": "Daily pipeline completed successfully", "timestamp": datetime.now(timezone.utc).isoformat()}
+        return {"status": "completed", "message": "Pipeline complete",
+                "timestamp": datetime.now(timezone.utc).isoformat()}
     except Exception as e:
         return {"error": str(e)}
