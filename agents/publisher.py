@@ -31,10 +31,6 @@ PRODUCT_TYPE_MAP = {
 
 
 async def get_printful_products() -> list:
-    """
-    Pulls all products from your Printful store.
-    Used to find the right product to create for each listing.
-    """
     try:
         async with httpx.AsyncClient() as client:
             response = await client.get(
@@ -46,18 +42,15 @@ async def get_printful_products() -> list:
                 timeout=30.0
             )
             if response.status_code == 200:
-                data = response.json()
-                return data.get("result", [])
-            else:
-                print(f"[PAM] Printful products error: {response.status_code}")
-                return []
+                return response.json().get("result", [])
+            print(f"[PAM] Printful products error: {response.status_code}")
+            return []
     except Exception as e:
         print(f"[PAM] Printful fetch error: {str(e)}")
         return []
 
 
 async def get_printful_product_detail(product_id: int) -> dict:
-    """Gets full details for a specific Printful product including variants."""
     try:
         async with httpx.AsyncClient() as client:
             response = await client.get(
@@ -77,28 +70,19 @@ async def get_printful_product_detail(product_id: int) -> dict:
 
 
 def match_product_to_listing(printful_products: list, product_type: str) -> dict:
-    """
-    Finds the best matching Printful product for a given product type.
-    Matches by keywords in the product name.
-    """
     keywords = PRODUCT_TYPE_MAP.get(product_type, ["t-shirt"])
-
     for product in printful_products:
         name = product.get("name", "").lower()
         if any(kw in name for kw in keywords):
             return product
-
-    # Default to first product if no match
     return printful_products[0] if printful_products else None
 
 
 async def get_etsy_shop_id(supabase, shop_name: str) -> str:
-    """Fetches the Etsy shop ID for a given shop name."""
     env_key = f"ETSY_SHOP_ID_{shop_name.upper().replace(' ', '_')}"
     cached = os.getenv(env_key)
     if cached:
         return cached
-
     try:
         headers = await get_etsy_headers(supabase)
         async with httpx.AsyncClient() as client:
@@ -109,39 +93,31 @@ async def get_etsy_shop_id(supabase, shop_name: str) -> str:
                 timeout=30.0
             )
             if response.status_code == 200:
-                data = response.json()
-                results = data.get("results", [])
+                results = response.json().get("results", [])
                 if results:
                     shop_id = str(results[0].get("shop_id"))
                     print(f"[PAM] Found shop ID for {shop_name}: {shop_id}")
                     return shop_id
-            print(f"[PAM] Could not fetch shop ID: {response.status_code} — {response.text[:100]}")
+            print(f"[PAM] Could not fetch shop ID: {response.status_code}")
             return None
     except Exception as e:
-        print(f"[PAM] Shop ID fetch error: {str(e)}")
+        print(f"[PAM] Shop ID error: {str(e)}")
         return None
 
 
 async def run_guardrails(supabase, listing: dict, product: dict, opportunity: dict) -> dict:
-    """Runs all pre-publish guardrail checks."""
     checks_passed = []
     checks_failed = []
 
-    # Check 1 — Daily listing limit
     today = datetime.now(timezone.utc).date().isoformat()
     today_response = supabase.table("financial_events")\
-        .select("*")\
-        .eq("category", "listing_fee")\
-        .gte("timestamp", today)\
-        .execute()
+        .select("*").eq("category", "listing_fee").gte("timestamp", today).execute()
     listings_today = len(today_response.data)
-
     if listings_today >= 3:
         checks_failed.append(f"Daily limit reached: {listings_today}/3")
     else:
         checks_passed.append(f"Daily limit OK: {listings_today}/3")
 
-    # Check 2 — Title
     title = listing.get("title", "")
     if len(title) > 140:
         checks_failed.append(f"Title too long: {len(title)} chars")
@@ -150,14 +126,12 @@ async def run_guardrails(supabase, listing: dict, product: dict, opportunity: di
     else:
         checks_passed.append(f"Title OK: {len(title)} chars")
 
-    # Check 3 — Tags
     tags = listing.get("tags", [])
     if len(tags) < 13:
         checks_failed.append(f"Not enough tags: {len(tags)}/13")
     else:
         checks_passed.append(f"Tags OK: {len(tags)}")
 
-    # Check 4 — Price
     price = listing.get("price", 0)
     if price < 9.99:
         checks_failed.append(f"Price too low: ${price}")
@@ -166,27 +140,23 @@ async def run_guardrails(supabase, listing: dict, product: dict, opportunity: di
     else:
         checks_passed.append(f"Price OK: ${price}")
 
-    # Check 5 — Margin
     product_type = product.get("product_type", "shirt")
     base_costs = {"shirt": 10.50, "hoodie": 22.00, "beanie": 14.00,
                   "tank": 11.00, "mug": 7.00, "poster": 9.00, "digital": 0.00}
     base_cost = base_costs.get(product_type, 10.50)
     etsy_fees = price * 0.065 + price * 0.03 + 0.25 + price * 0.018
     margin = (price - base_cost - etsy_fees) / price * 100 if price > 0 else 0
-
     if margin < 25:
         checks_failed.append(f"Margin too low: {margin:.1f}%")
     else:
         checks_passed.append(f"Margin OK: {margin:.1f}%")
 
-    # Check 6 — Description
     description = listing.get("description", "")
     if len(description) < 100:
         checks_failed.append(f"Description too short: {len(description)} chars")
     else:
         checks_passed.append(f"Description OK: {len(description)} chars")
 
-    # Check 7 — Trademark scan
     trademark_terms = [
         "nike", "adidas", "disney", "marvel", "nfl", "nba", "mlb", "nhl",
         "pokemon", "harry potter", "star wars", "coca cola", "apple",
@@ -210,9 +180,7 @@ async def run_guardrails(supabase, listing: dict, product: dict, opportunity: di
 
 
 async def create_printful_product(listing: dict, product: dict, printful_products: list) -> dict:
-    """Creates a product in Printful matched to the right existing product type."""
     product_type = product.get("product_type", "shirt")
-
     if product_type == "digital":
         return {"success": True, "printful_id": None, "is_digital": True}
 
@@ -223,16 +191,12 @@ async def create_printful_product(listing: dict, product: dict, printful_product
     printful_product_id = matched.get("id")
     print(f"[PAM] Matched Printful product: {matched.get('name')} (ID: {printful_product_id})")
 
-    # Get full product details to find variant IDs
     detail = await get_printful_product_detail(printful_product_id)
     sync_variants = detail.get("sync_variants", [])
-
     if not sync_variants:
-        return {"success": False, "error": "No variants found for Printful product"}
+        return {"success": False, "error": "No variants found"}
 
-    # Use the first available variant
     first_variant = sync_variants[0]
-    variant_id = first_variant.get("id")
 
     try:
         price = listing.get("price", 24.99)
@@ -246,7 +210,6 @@ async def create_printful_product(listing: dict, product: dict, printful_product
                 json={
                     "sync_product": {
                         "name": listing.get("title", "")[:100],
-                        "thumbnail": None,
                     },
                     "sync_variants": [
                         {
@@ -258,25 +221,22 @@ async def create_printful_product(listing: dict, product: dict, printful_product
                 },
                 timeout=30.0
             )
-
             if response.status_code in [200, 201]:
-                data = response.json()
-                printful_id = data.get("result", {}).get("id")
+                printful_id = response.json().get("result", {}).get("id")
                 return {"success": True, "printful_id": printful_id}
-            else:
-                print(f"[PAM] Printful create error: {response.status_code} — {response.text[:200]}")
-                return {"success": False, "error": f"Printful error {response.status_code}"}
-
+            print(f"[PAM] Printful create error: {response.status_code} — {response.text[:200]}")
+            return {"success": False, "error": f"Printful error {response.status_code}"}
     except Exception as e:
         return {"success": False, "error": str(e)}
 
 
 async def publish_to_etsy(supabase, listing: dict, shop_id: str) -> dict:
-    """Creates an active listing on Etsy."""
+    """Creates an active listing on Etsy with shipping profile."""
     try:
         headers = await get_etsy_headers(supabase)
         tags = listing.get("tags", [])[:13]
         price = float(listing.get("price", 24.99))
+        shipping_profile_id = int(os.getenv("ETSY_SHIPPING_PROFILE_ID", "0"))
 
         async with httpx.AsyncClient() as client:
             response = await client.post(
@@ -293,6 +253,7 @@ async def publish_to_etsy(supabase, listing: dict, shop_id: str) -> dict:
                     "tags": tags,
                     "state": "active",
                     "type": "physical",
+                    "shipping_profile_id": shipping_profile_id,
                 },
                 timeout=30.0
             )
@@ -305,7 +266,6 @@ async def publish_to_etsy(supabase, listing: dict, shop_id: str) -> dict:
 
             data = response.json()
             etsy_listing_id = data.get("listing_id")
-
             return {
                 "success": True,
                 "etsy_listing_id": str(etsy_listing_id),
@@ -317,15 +277,6 @@ async def publish_to_etsy(supabase, listing: dict, shop_id: str) -> dict:
 
 
 async def run_publisher(supabase):
-    """
-    Pam's full routine:
-    1. Check daily limit
-    2. Pull pending listings
-    3. Run guardrails
-    4. Match to Printful product
-    5. Publish to correct Etsy shop
-    6. Log everything
-    """
     task_id = await log_task_start(
         supabase, "publisher", "forge",
         "listing_publish",
@@ -336,13 +287,9 @@ async def run_publisher(supabase):
         await update_agent_status(supabase, "publisher", "running")
         print(f"\n[PAM] Starting publishing run at {datetime.now(timezone.utc)}")
 
-        # Check daily limit
         today = datetime.now(timezone.utc).date().isoformat()
         today_response = supabase.table("financial_events")\
-            .select("*")\
-            .eq("category", "listing_fee")\
-            .gte("timestamp", today)\
-            .execute()
+            .select("*").eq("category", "listing_fee").gte("timestamp", today).execute()
         listings_today = len(today_response.data)
 
         if listings_today >= 3:
@@ -356,19 +303,18 @@ async def run_publisher(supabase):
         slots_remaining = 3 - listings_today
         print(f"[PAM] {slots_remaining} publishing slots available")
 
-        # Fetch Printful products once
         printful_products = await get_printful_products()
         print(f"[PAM] Found {len(printful_products)} Printful products in store")
 
-        # Pull pending listings
         listings_response = supabase.table("listings")\
             .select("*, products(*, opportunities(*))")\
             .eq("status", "pending_review")\
+            .eq("shop", "benoutside")\
             .limit(slots_remaining)\
             .execute()
 
         listings = listings_response.data
-        print(f"[PAM] {len(listings)} listings pending review")
+        print(f"[PAM] {len(listings)} BenOutside listings pending review")
 
         if not listings:
             print("[PAM] No listings pending")
@@ -387,10 +333,7 @@ async def run_publisher(supabase):
             opportunity = product.get("opportunities", {}) or {}
 
             print(f"\n[PAM] Processing: '{listing.get('title', '')[:60]}...'")
-            shop_key = listing.get("shop", "benoutside")
-            print(f"[PAM] Shop: {shop_key}")
 
-            # Run guardrails
             guardrail_result = await run_guardrails(supabase, listing, product, opportunity)
 
             if not guardrail_result["allowed"]:
@@ -409,16 +352,8 @@ async def run_publisher(supabase):
 
             print(f"[PAM] ✓ Guardrails passed — margin: {guardrail_result['margin']}%")
 
-            # Get shop ID
-            shop_name = SHOP_CONFIG.get(shop_key, {}).get("name", "BenOutsideCo")
-            shop_id = await get_etsy_shop_id(supabase, shop_name)
+            shop_id = "50046147"
 
-            if not shop_id:
-                print(f"[PAM] ✗ Could not get shop ID for {shop_name}")
-                blocked += 1
-                continue
-
-            # Create in Printful
             product_type = product.get("product_type", "shirt")
             if product_type != "digital" and printful_products:
                 print(f"[PAM] Creating Printful product...")
@@ -427,13 +362,12 @@ async def run_publisher(supabase):
                     printful_id = printful_result.get("printful_id")
                     print(f"[PAM] ✓ Printful product: {printful_id}")
                 else:
-                    print(f"[PAM] Printful failed: {printful_result.get('error')} — publishing anyway")
+                    print(f"[PAM] Printful failed: {printful_result.get('error')} — continuing")
                     printful_id = None
             else:
                 printful_id = None
 
-            # Publish to Etsy
-            print(f"[PAM] Publishing to Etsy — {shop_name}...")
+            print(f"[PAM] Publishing to Etsy — BenOutsideCo...")
             etsy_result = await publish_to_etsy(supabase, listing, shop_id)
 
             if not etsy_result.get("success"):
@@ -446,7 +380,6 @@ async def run_publisher(supabase):
             listing_url = etsy_result.get("url")
             print(f"[PAM] ✓ LIVE: {listing_url}")
 
-            # Update records
             supabase.table("listings").update({
                 "status": "published",
                 "etsy_listing_id": etsy_listing_id,
@@ -458,7 +391,6 @@ async def run_publisher(supabase):
                     "status": "live"
                 }).eq("id", product.get("id")).execute()
 
-            # Log listing fee
             supabase.table("financial_events").insert({
                 "type": "cost",
                 "category": "listing_fee",
@@ -469,7 +401,6 @@ async def run_publisher(supabase):
             }).execute()
             total_fees += 0.20
 
-            # Audit log
             supabase.table("audit_log").insert({
                 "agent": "publisher",
                 "action": "listing_published",
@@ -477,7 +408,7 @@ async def run_publisher(supabase):
                 "details": {
                     "etsy_listing_id": etsy_listing_id,
                     "url": listing_url,
-                    "shop": shop_key,
+                    "shop": "benoutside",
                     "price": listing.get("price"),
                     "margin": guardrail_result["margin"],
                     "timestamp": datetime.now(timezone.utc).isoformat()
