@@ -199,7 +199,7 @@ async def get_shipping_profiles():
 async def create_shipping_profile():
     """
     Creates a basic shipping profile for BenOutsideCo.
-    Run this once to set up shipping before Pam publishes.
+    Run this once before Pam publishes.
     """
     try:
         from token_manager import get_etsy_headers
@@ -212,6 +212,7 @@ async def create_shipping_profile():
                 json={
                     "title": "Standard Shipping",
                     "origin_country_iso": "US",
+                    "origin_postal_code": "20001",
                     "primary_cost": 4.99,
                     "secondary_cost": 2.00,
                     "destination_country_iso": "US",
@@ -232,7 +233,7 @@ async def create_shipping_profile():
                     "message": f"Add ETSY_SHIPPING_PROFILE_ID={profile_id} to Railway variables"
                 }
             return {
-                "error": f"Failed to create shipping profile: {response.status_code}",
+                "error": f"Failed: {response.status_code}",
                 "details": response.text[:300]
             }
     except Exception as e:
