@@ -174,7 +174,6 @@ async def etsy_callback(code: str = None, state: str = None, error: str = None):
 
 @app.get("/etsy/shipping-profiles")
 async def get_shipping_profiles():
-    """Fetches all shipping profiles from BenOutsideCo."""
     try:
         from token_manager import get_etsy_headers
         headers = await get_etsy_headers(supabase)
@@ -195,7 +194,6 @@ async def get_shipping_profiles():
 
 @app.get("/etsy/create-shipping-profile")
 async def create_shipping_profile():
-    """Creates a basic shipping profile for BenOutsideCo."""
     try:
         from token_manager import get_etsy_headers
         headers = await get_etsy_headers(supabase)
@@ -235,11 +233,6 @@ async def create_shipping_profile():
 
 @app.get("/etsy/create-processing-profile")
 async def create_processing_profile():
-    """
-    Creates a made-to-order readiness state definition for BenOutsideCo.
-    Run this ONCE before Pam publishes. Returns the readiness_state_id
-    to add as ETSY_READINESS_STATE_ID in Railway.
-    """
     try:
         from token_manager import get_etsy_headers
         headers = await get_etsy_headers(supabase)
@@ -253,7 +246,7 @@ async def create_processing_profile():
                     "readiness_state": "made_to_order",
                     "min_processing_time": 3,
                     "max_processing_time": 7,
-                    "processing_time_unit": "days",  # FIXED: was "business_days"
+                    "processing_time_unit": "days",
                 },
                 timeout=30.0
             )
@@ -293,6 +286,19 @@ async def create_processing_profile():
     except Exception as e:
         import traceback
         return {"error": str(e), "traceback": traceback.format_exc()}
+
+
+@app.get("/guardrails/recent")
+def get_recent_guardrails():
+    try:
+        response = supabase.table("guardrail_events")\
+            .select("*")\
+            .order("timestamp", desc=True)\
+            .limit(10)\
+            .execute()
+        return {"guardrail_events": response.data, "count": len(response.data)}
+    except Exception as e:
+        return {"error": str(e)}
 
 
 @app.get("/agents")
@@ -353,7 +359,6 @@ def get_listings():
 
 @app.post("/ideas/submit")
 async def submit_idea(idea: IdeaSubmission):
-    """CEO submits a product idea directly to the pipeline."""
     try:
         result = supabase.table("opportunities").insert({
             "title": idea.concept[:200],
@@ -405,7 +410,6 @@ async def submit_idea(idea: IdeaSubmission):
 
 @app.get("/ideas")
 def get_ideas():
-    """Returns all CEO-submitted ideas and their pipeline status."""
     try:
         response = supabase.table("opportunities").select("*")\
             .eq("niche", "CEO Idea")\
