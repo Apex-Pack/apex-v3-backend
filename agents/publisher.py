@@ -6,6 +6,7 @@
 import os
 import json
 import httpx
+import base64
 from datetime import datetime, timezone
 from helpers import log_task_start, log_task_complete, log_task_failed, update_agent_status
 from observability import report_error
@@ -230,27 +231,101 @@ async def create_printful_product(listing: dict, product: dict, printful_product
         return {"success": False, "error": str(e)}
 
 
+async def upload_listing_image(supabase, etsy_listing_id: str, shop_id: str, product: dict) -> dict:
+    """
+    Uploads the design image from the product record to an Etsy listing.
+    Pulls base64 image data saved by Dennis and posts it to Etsy's image API.
+    """
+    try:
+        design_assets = product.get("design_assets", {})
+        image_data = design_assets.get("image_data")
+        mime_type = design_assets.get("mime_type", "image/png")
+
+        if not image_data:
+            print(f"[PAM] No image data found in product record")
+            return {"success": False, "error": "No image data in product"}
+
+        # Decode base64 to raw bytes
+        image_bytes = base64.b64decode(image_data)
+        extension = "png" if "png" in mime_type else "jpg"
+        filename = f"listing_{etsy_listing_id}.{extension}"
+
+        headers = await get_etsy_headers(supabase)
+        # Remove Content-Type — httpx sets it automatically for multipart
+        headers.pop("Content-Type", None)
+
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            response = await client.post(
+                f"{ETSY_API_BASE}/application/shops/{shop_id}/listings/{etsy_listing_id}/images",
+                headers=headers,
+                files={
+                    "image": (filename, image_bytes, mime_type)
+                },
+                data={
+                    "rank": 1,
+                    "overwrite": True
+                }
+            )
+
+        if response.status_code in [200, 201]:
+            print(f"[PAM] ✓ Image uploaded to listing {etsy_listing_id}")
+            return {"success": True}
+
+        print(f"[PAM] ✗ Image upload failed: {response.status_code} — {response.text[:300]}")
+        return {"success": False, "error": f"Image upload error {response.status_code}: {response.text[:200]}"}
+
+    except Exception as e:
+        print(f"[PAM] Image upload exception: {str(e)}")
+        return {"success": False, "error": str(e)}
+
+
+async def activate_listing(supabase, etsy_listing_id: str, shop_id: str) -> dict:
+    """
+    Sets a draft Etsy listing to active after images have been uploaded.
+    """
+    try:
+        headers = await get_etsy_headers(supabase)
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.patch(
+                f"{ETSY_API_BASE}/application/shops/{shop_id}/listings/{etsy_listing_id}",
+                headers=headers,
+                json={"state": "active"}
+            )
+
+        if response.status_code in [200, 201]:
+            print(f"[PAM] ✓ Listing {etsy_listing_id} activated")
+            return {"success": True}
+
+        print(f"[PAM] ✗ Activation failed: {response.status_code} — {response.text[:300]}")
+        return {"success": False, "error": f"Activation error {response.status_code}: {response.text[:200]}"}
+
+    except Exception as e:
+        print(f"[PAM] Activation exception: {str(e)}")
+        return {"success": False, "error": str(e)}
+
+
 async def publish_to_etsy(supabase, listing: dict, shop_id: str) -> dict:
-    """Creates an active listing on Etsy with shipping and processing profiles."""
+    """
+    Creates a draft listing on Etsy, uploads the image, then activates it.
+    """
     try:
         headers = await get_etsy_headers(supabase)
         tags = listing.get("tags", [])[:13]
         price = float(listing.get("price", 24.99))
 
-        # Load shipping profile ID
         raw_shipping_id = os.getenv("ETSY_SHIPPING_PROFILE_ID")
         print(f"[PAM] Shipping profile ID: '{raw_shipping_id}'")
         if not raw_shipping_id or raw_shipping_id == "0":
             return {"success": False, "error": "ETSY_SHIPPING_PROFILE_ID not configured"}
         shipping_profile_id = int(raw_shipping_id)
 
-        # Load readiness state ID
         raw_readiness_id = os.getenv("ETSY_READINESS_STATE_ID")
         print(f"[PAM] Readiness state ID: '{raw_readiness_id}'")
         if not raw_readiness_id or raw_readiness_id == "0":
             return {"success": False, "error": "ETSY_READINESS_STATE_ID not configured"}
         readiness_state_id = int(raw_readiness_id)
 
+        # Step 1 — Create the listing as draft first
         async with httpx.AsyncClient() as client:
             response = await client.post(
                 f"{ETSY_API_BASE}/application/shops/{shop_id}/listings",
@@ -264,7 +339,7 @@ async def publish_to_etsy(supabase, listing: dict, shop_id: str) -> dict:
                     "when_made": "made_to_order",
                     "taxonomy_id": 1,
                     "tags": tags,
-                    "state": "active",
+                    "state": "draft",
                     "type": "physical",
                     "shipping_profile_id": shipping_profile_id,
                     "readiness_state_id": readiness_state_id,
@@ -279,12 +354,15 @@ async def publish_to_etsy(supabase, listing: dict, shop_id: str) -> dict:
                 }
 
             data = response.json()
-            etsy_listing_id = data.get("listing_id")
-            return {
-                "success": True,
-                "etsy_listing_id": str(etsy_listing_id),
-                "url": f"https://www.etsy.com/listing/{etsy_listing_id}"
-            }
+            etsy_listing_id = str(data.get("listing_id"))
+            print(f"[PAM] Draft listing created: {etsy_listing_id}")
+
+        return {
+            "success": True,
+            "etsy_listing_id": etsy_listing_id,
+            "url": f"https://www.etsy.com/listing/{etsy_listing_id}",
+            "needs_activation": True
+        }
 
     except Exception as e:
         return {"success": False, "error": str(e)}
@@ -361,7 +439,8 @@ async def run_publisher(supabase):
                     "listing_id": listing["id"],
                     "timestamp": datetime.now(timezone.utc).isoformat()
                 }).execute()
-                supabase.table("listings").update({"status": "draft"}).eq("id", listing["id"]).execute()
+                supabase.table("listings").update({"status": "draft"})\
+                    .eq("id", listing["id"]).execute()
                 continue
 
             print(f"[PAM] ✓ Guardrails passed — margin: {guardrail_result['margin']}%")
@@ -381,17 +460,47 @@ async def run_publisher(supabase):
             else:
                 printful_id = None
 
-            print(f"[PAM] Publishing to Etsy — BenOutsideCo...")
+            # Step 1 — Create draft listing on Etsy
+            print(f"[PAM] Creating draft listing on Etsy...")
             etsy_result = await publish_to_etsy(supabase, listing, shop_id)
 
             if not etsy_result.get("success"):
-                print(f"[PAM] ✗ Etsy failed: {etsy_result.get('error')}")
+                print(f"[PAM] ✗ Etsy listing creation failed: {etsy_result.get('error')}")
                 blocked += 1
                 continue
 
-            published += 1
             etsy_listing_id = etsy_result.get("etsy_listing_id")
             listing_url = etsy_result.get("url")
+
+            # Step 2 — Upload image
+            print(f"[PAM] Uploading image to listing {etsy_listing_id}...")
+            image_result = await upload_listing_image(supabase, etsy_listing_id, shop_id, product)
+
+            if not image_result.get("success"):
+                print(f"[PAM] ✗ Image upload failed: {image_result.get('error')} — listing stays draft")
+                # Don't block the listing — save it as draft so we can retry image later
+                supabase.table("listings").update({
+                    "status": "draft",
+                    "etsy_listing_id": etsy_listing_id,
+                }).eq("id", listing["id"]).execute()
+                blocked += 1
+                continue
+
+            # Step 3 — Activate listing
+            print(f"[PAM] Activating listing...")
+            activation_result = await activate_listing(supabase, etsy_listing_id, shop_id)
+
+            if not activation_result.get("success"):
+                print(f"[PAM] ✗ Activation failed — listing stays draft with image")
+                supabase.table("listings").update({
+                    "status": "draft",
+                    "etsy_listing_id": etsy_listing_id,
+                }).eq("id", listing["id"]).execute()
+                blocked += 1
+                continue
+
+            # All three steps passed — listing is live
+            published += 1
             print(f"[PAM] ✓ LIVE: {listing_url}")
 
             supabase.table("listings").update({
