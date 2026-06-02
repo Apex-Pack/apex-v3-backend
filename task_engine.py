@@ -14,6 +14,8 @@ from agents.analyst import run_analyst as analyst_agent
 from agents.recon import run_recon as recon_agent
 from agents.designer import run_designer as designer_agent
 from agents.copywriter import run_copywriter as copywriter_agent
+from agents.publisher import run_publisher as publisher_agent
+
 
 async def check_daily_listing_budget(supabase: Client) -> dict:
     today = datetime.now(timezone.utc).date().isoformat()
@@ -77,14 +79,10 @@ async def run_copywriter(supabase: Client):
 
 
 async def run_publisher(supabase: Client):
-    task_id = await log_task_start(supabase, "publisher", "forge", "listing_publish", {"mode": "placeholder"})
     try:
-        await update_agent_status(supabase, "publisher", "running")
-        await log_task_complete(supabase, task_id, {"status": "placeholder"})
-        await update_agent_status(supabase, "publisher", "idle")
+        await publisher_agent(supabase)
     except Exception as e:
-        await log_task_failed(supabase, task_id, str(e))
-        await update_agent_status(supabase, "publisher", "error")
+        print(f"[PAM] Failed: {traceback.format_exc()}")
 
 
 async def run_treasurer(supabase: Client):
@@ -108,20 +106,9 @@ async def run_daily_pipeline(supabase: Client):
     await run_recon(supabase)
     await run_designer(supabase)
     await run_copywriter(supabase)
-
-    guardrail_check = await check_daily_listing_budget(supabase)
-    if guardrail_check["allowed"]:
-        await run_publisher(supabase)
-    else:
-        print(f"[GUARDRAIL] Publisher blocked: {guardrail_check['reason']}")
-        await log_guardrail_event(
-            supabase, "publisher",
-            "publish_listing",
-            guardrail_check["reason"],
-            guardrail_check
-        )
-
+    await run_publisher(supabase)
     await run_treasurer(supabase)
+
     print(f"\n[APEX] Daily pipeline complete at {datetime.now(timezone.utc)}\n")
 
 
