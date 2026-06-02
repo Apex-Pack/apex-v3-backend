@@ -236,16 +236,21 @@ async def create_shipping_profile():
 @app.get("/etsy/create-processing-profile")
 async def create_processing_profile():
     """
-    Creates a made-to-order processing profile for BenOutsideCo.
-    Run this once before Pam publishes.
+    Creates a made-to-order readiness state definition for BenOutsideCo.
+    Run this ONCE before Pam publishes. Returns the readiness_state_id
+    to add as ETSY_READINESS_STATE_ID in Railway.
+
+    Fixed: uses correct Etsy V3 endpoint — readiness-state-definitions.
     """
     try:
         from token_manager import get_etsy_headers
         headers = await get_etsy_headers(supabase)
         shop_id = "50046147"
+
         async with httpx.AsyncClient() as client:
             response = await client.post(
-                f"https://openapi.etsy.com/v3/application/shops/{shop_id}/processing-profiles",
+                # FIXED: correct Etsy V3 endpoint
+                f"https://openapi.etsy.com/v3/application/shops/{shop_id}/readiness-state-definitions",
                 headers=headers,
                 json={
                     "readiness_state": "made_to_order",
@@ -255,18 +260,45 @@ async def create_processing_profile():
                 },
                 timeout=30.0
             )
-            if response.status_code in [200, 201]:
-                data = response.json()
-                profile_id = data.get("readiness_state_id")
-                return {
-                    "success": True,
+
+        # Log the raw response so we can debug if needed
+        print(f"[APEX] Readiness state response: {response.status_code} — {response.text[:500]}")
+
+        if response.status_code in [200, 201]:
+            data = response.json()
+            # Etsy may return this under different field names — we check all of them
+            profile_id = (
+                data.get("readiness_state_id")
+                or data.get("shop_readiness_state_id")
+                or data.get("id")
+            )
+            supabase.table("audit_log").insert({
+                "agent": "system",
+                "action": "readiness_state_created",
+                "success": True,
+                "details": {
                     "readiness_state_id": profile_id,
-                    "message": f"Add ETSY_READINESS_STATE_ID={profile_id} to Railway variables"
+                    "raw_response": data,
+                    "timestamp": datetime.now(timezone.utc).isoformat()
                 }
-            return {"error": f"Failed: {response.status_code}",
-                    "details": response.text[:300]}
+            }).execute()
+            return {
+                "success": True,
+                "readiness_state_id": profile_id,
+                "raw_response": data,
+                "next_step": f"Add ETSY_READINESS_STATE_ID={profile_id} to Railway, then hit /publisher/run"
+            }
+
+        # If it failed, return the full error so we know exactly what Etsy said
+        return {
+            "error": f"Etsy returned {response.status_code}",
+            "details": response.text[:500],
+            "hint": "If 404: endpoint may not apply to your shop type. If 403: check OAuth scopes. If 422: check request body."
+        }
+
     except Exception as e:
-        return {"error": str(e)}
+        import traceback
+        return {"error": str(e), "traceback": traceback.format_exc()}
 
 
 @app.get("/agents")
