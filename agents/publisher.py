@@ -236,7 +236,16 @@ async def publish_to_etsy(supabase, listing: dict, shop_id: str) -> dict:
         headers = await get_etsy_headers(supabase)
         tags = listing.get("tags", [])[:13]
         price = float(listing.get("price", 24.99))
-        shipping_profile_id = int(os.getenv("ETSY_SHIPPING_PROFILE_ID", "0"))
+
+        # Debug — print what we're reading
+        raw_shipping_id = os.getenv("ETSY_SHIPPING_PROFILE_ID")
+        print(f"[PAM] Raw shipping profile env var: '{raw_shipping_id}'")
+
+        if not raw_shipping_id or raw_shipping_id == "0":
+            return {"success": False, "error": "ETSY_SHIPPING_PROFILE_ID not configured"}
+
+        shipping_profile_id = int(raw_shipping_id)
+        print(f"[PAM] Using shipping profile ID: {shipping_profile_id}")
 
         async with httpx.AsyncClient() as client:
             response = await client.post(
