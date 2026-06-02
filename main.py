@@ -172,6 +172,73 @@ async def etsy_callback(code: str = None, state: str = None, error: str = None):
     }
 
 
+@app.get("/etsy/shipping-profiles")
+async def get_shipping_profiles():
+    """Fetches all shipping profiles from BenOutsideCo."""
+    try:
+        from token_manager import get_etsy_headers
+        headers = await get_etsy_headers(supabase)
+        shop_id = "50046147"
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                f"https://openapi.etsy.com/v3/application/shops/{shop_id}/shipping-profiles",
+                headers=headers,
+                timeout=30.0
+            )
+            if response.status_code == 200:
+                return response.json()
+            return {
+                "error": f"Etsy API returned {response.status_code}",
+                "details": response.text[:300]
+            }
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.get("/etsy/create-shipping-profile")
+async def create_shipping_profile():
+    """
+    Creates a basic shipping profile for BenOutsideCo.
+    Run this once to set up shipping before Pam publishes.
+    """
+    try:
+        from token_manager import get_etsy_headers
+        headers = await get_etsy_headers(supabase)
+        shop_id = "50046147"
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                f"https://openapi.etsy.com/v3/application/shops/{shop_id}/shipping-profiles",
+                headers=headers,
+                json={
+                    "title": "Standard Shipping",
+                    "origin_country_iso": "US",
+                    "primary_cost": 4.99,
+                    "secondary_cost": 2.00,
+                    "destination_country_iso": "US",
+                    "min_processing_time": 3,
+                    "max_processing_time": 7,
+                    "processing_time_unit": "business_days",
+                    "min_delivery_days": 3,
+                    "max_delivery_days": 7,
+                },
+                timeout=30.0
+            )
+            if response.status_code in [200, 201]:
+                data = response.json()
+                profile_id = data.get("shipping_profile_id")
+                return {
+                    "success": True,
+                    "shipping_profile_id": profile_id,
+                    "message": f"Add ETSY_SHIPPING_PROFILE_ID={profile_id} to Railway variables"
+                }
+            return {
+                "error": f"Failed to create shipping profile: {response.status_code}",
+                "details": response.text[:300]
+            }
+    except Exception as e:
+        return {"error": str(e)}
+
+
 @app.get("/agents")
 def get_agents():
     try:
@@ -228,18 +295,9 @@ def get_listings():
         return {"error": str(e)}
 
 
-# ============================================
-# CEO Idea Drop
-# ============================================
-
 @app.post("/ideas/submit")
 async def submit_idea(idea: IdeaSubmission):
-    """
-    CEO submits a product idea directly to the pipeline.
-    Creates an opportunity record tagged as ceo_idea.
-    Alan picks it up next run and prosecutes it.
-    Priority ideas jump to front of publishing queue.
-    """
+    """CEO submits a product idea directly to the pipeline."""
     try:
         result = supabase.table("opportunities").insert({
             "title": idea.concept[:200],
@@ -278,7 +336,7 @@ async def submit_idea(idea: IdeaSubmission):
 
         return {
             "status": "received",
-            "message": f"Idea submitted to pipeline. Alan will prosecute it on the next run.",
+            "message": "Idea submitted. Alan will prosecute it on the next run.",
             "opportunity_id": idea_id,
             "shop": idea.shop,
             "priority": idea.priority,
@@ -300,10 +358,6 @@ def get_ideas():
     except Exception as e:
         return {"error": str(e)}
 
-
-# ============================================
-# Agent Debug Endpoints
-# ============================================
 
 @app.get("/scout/run")
 async def run_scout_debug():
