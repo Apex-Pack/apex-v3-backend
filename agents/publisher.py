@@ -79,33 +79,6 @@ def match_product_to_listing(printful_products: list, product_type: str) -> dict
     return printful_products[0] if printful_products else None
 
 
-async def get_etsy_shop_id(supabase, shop_name: str) -> str:
-    env_key = f"ETSY_SHOP_ID_{shop_name.upper().replace(' ', '_')}"
-    cached = os.getenv(env_key)
-    if cached:
-        return cached
-    try:
-        headers = await get_etsy_headers(supabase)
-        async with httpx.AsyncClient() as client:
-            response = await client.get(
-                f"{ETSY_API_BASE}/application/shops",
-                headers=headers,
-                params={"shop_name": shop_name},
-                timeout=30.0
-            )
-            if response.status_code == 200:
-                results = response.json().get("results", [])
-                if results:
-                    shop_id = str(results[0].get("shop_id"))
-                    print(f"[PAM] Found shop ID for {shop_name}: {shop_id}")
-                    return shop_id
-            print(f"[PAM] Could not fetch shop ID: {response.status_code}")
-            return None
-    except Exception as e:
-        print(f"[PAM] Shop ID error: {str(e)}")
-        return None
-
-
 async def run_guardrails(supabase, listing: dict, product: dict, opportunity: dict) -> dict:
     checks_passed = []
     checks_failed = []
@@ -234,7 +207,6 @@ async def create_printful_product(listing: dict, product: dict, printful_product
 async def upload_listing_image(supabase, etsy_listing_id: str, shop_id: str, product: dict) -> dict:
     """
     Uploads the design image from the product record to an Etsy listing.
-    Pulls base64 image data saved by Dennis and posts it to Etsy's image API.
     """
     try:
         design_assets = product.get("design_assets", {})
@@ -245,26 +217,19 @@ async def upload_listing_image(supabase, etsy_listing_id: str, shop_id: str, pro
             print(f"[PAM] No image data found in product record")
             return {"success": False, "error": "No image data in product"}
 
-        # Decode base64 to raw bytes
         image_bytes = base64.b64decode(image_data)
         extension = "png" if "png" in mime_type else "jpg"
         filename = f"listing_{etsy_listing_id}.{extension}"
 
         headers = await get_etsy_headers(supabase)
-        # Remove Content-Type — httpx sets it automatically for multipart
         headers.pop("Content-Type", None)
 
         async with httpx.AsyncClient(timeout=60.0) as client:
             response = await client.post(
                 f"{ETSY_API_BASE}/application/shops/{shop_id}/listings/{etsy_listing_id}/images",
                 headers=headers,
-                files={
-                    "image": (filename, image_bytes, mime_type)
-                },
-                data={
-                    "rank": 1,
-                    "overwrite": True
-                }
+                files={"image": (filename, image_bytes, mime_type)},
+                data={"rank": 1, "overwrite": True}
             )
 
         if response.status_code in [200, 201]:
@@ -279,34 +244,10 @@ async def upload_listing_image(supabase, etsy_listing_id: str, shop_id: str, pro
         return {"success": False, "error": str(e)}
 
 
-async def activate_listing(supabase, etsy_listing_id: str, shop_id: str) -> dict:
-    """
-    Sets a draft Etsy listing to active after images have been uploaded.
-    """
-    try:
-        headers = await get_etsy_headers(supabase)
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.patch(
-                f"{ETSY_API_BASE}/application/shops/{shop_id}/listings/{etsy_listing_id}",
-                headers=headers,
-                json={"state": "active"}
-            )
-
-        if response.status_code in [200, 201]:
-            print(f"[PAM] ✓ Listing {etsy_listing_id} activated")
-            return {"success": True}
-
-        print(f"[PAM] ✗ Activation failed: {response.status_code} — {response.text[:300]}")
-        return {"success": False, "error": f"Activation error {response.status_code}: {response.text[:200]}"}
-
-    except Exception as e:
-        print(f"[PAM] Activation exception: {str(e)}")
-        return {"success": False, "error": str(e)}
-
-
 async def publish_to_etsy(supabase, listing: dict, shop_id: str) -> dict:
     """
-    Creates a draft listing on Etsy, uploads the image, then activates it.
+    Creates a DRAFT listing on Etsy and uploads the image.
+    Listings stay as draft for human review before manual activation.
     """
     try:
         headers = await get_etsy_headers(supabase)
@@ -325,7 +266,7 @@ async def publish_to_etsy(supabase, listing: dict, shop_id: str) -> dict:
             return {"success": False, "error": "ETSY_READINESS_STATE_ID not configured"}
         readiness_state_id = int(raw_readiness_id)
 
-        # Step 1 — Create the listing as draft first
+        # Create listing as draft — human reviews before activating
         async with httpx.AsyncClient() as client:
             response = await client.post(
                 f"{ETSY_API_BASE}/application/shops/{shop_id}/listings",
@@ -361,7 +302,6 @@ async def publish_to_etsy(supabase, listing: dict, shop_id: str) -> dict:
             "success": True,
             "etsy_listing_id": etsy_listing_id,
             "url": f"https://www.etsy.com/listing/{etsy_listing_id}",
-            "needs_activation": True
         }
 
     except Exception as e:
@@ -478,7 +418,6 @@ async def run_publisher(supabase):
 
             if not image_result.get("success"):
                 print(f"[PAM] ✗ Image upload failed: {image_result.get('error')} — listing stays draft")
-                # Don't block the listing — save it as draft so we can retry image later
                 supabase.table("listings").update({
                     "status": "draft",
                     "etsy_listing_id": etsy_listing_id,
@@ -486,25 +425,12 @@ async def run_publisher(supabase):
                 blocked += 1
                 continue
 
-            # Step 3 — Activate listing
-            print(f"[PAM] Activating listing...")
-            activation_result = await activate_listing(supabase, etsy_listing_id, shop_id)
-
-            if not activation_result.get("success"):
-                print(f"[PAM] ✗ Activation failed — listing stays draft with image")
-                supabase.table("listings").update({
-                    "status": "draft",
-                    "etsy_listing_id": etsy_listing_id,
-                }).eq("id", listing["id"]).execute()
-                blocked += 1
-                continue
-
-            # All three steps passed — listing is live
+            # Listing is draft with image — ready for human review
             published += 1
-            print(f"[PAM] ✓ LIVE: {listing_url}")
+            print(f"[PAM] ✓ DRAFT READY FOR REVIEW: {listing_url}")
 
             supabase.table("listings").update({
-                "status": "published",
+                "status": "draft_review",
                 "etsy_listing_id": etsy_listing_id,
             }).eq("id", listing["id"]).execute()
 
@@ -526,7 +452,7 @@ async def run_publisher(supabase):
 
             supabase.table("audit_log").insert({
                 "agent": "publisher",
-                "action": "listing_published",
+                "action": "listing_draft_created",
                 "success": True,
                 "details": {
                     "etsy_listing_id": etsy_listing_id,
@@ -534,12 +460,13 @@ async def run_publisher(supabase):
                     "shop": "benoutside",
                     "price": listing.get("price"),
                     "margin": guardrail_result["margin"],
+                    "status": "draft_review",
                     "timestamp": datetime.now(timezone.utc).isoformat()
                 }
             }).execute()
 
         result = {
-            "listings_published": published,
+            "listings_drafted": published,
             "listings_blocked": blocked,
             "listing_fees_paid": total_fees,
             "timestamp": datetime.now(timezone.utc).isoformat()
@@ -549,7 +476,7 @@ async def run_publisher(supabase):
         await update_agent_status(supabase, "publisher", "idle")
 
         print(f"\n[PAM] Complete:")
-        print(f"[PAM]   Published: {published}")
+        print(f"[PAM]   Drafted for review: {published}")
         print(f"[PAM]   Blocked: {blocked}")
         print(f"[PAM]   Fees: ${total_fees:.2f}")
         return result
