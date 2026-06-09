@@ -4,6 +4,7 @@
 # ============================================
 
 import os
+import re
 import json
 import httpx
 import base64
@@ -130,9 +131,10 @@ Respond with ONLY the image generation prompt as plain text — no markdown, no 
         messages=[{"role": "user", "content": prompt}]
     )
 
-    # Strip any markdown formatting Claude might add
+    # Strip markdown formatting and any variant labels Claude sneaks in
     raw = message.content[0].text.strip()
     clean_prompt = raw.replace("**", "").replace("##", "").replace("*", "").strip()
+    clean_prompt = re.sub(r'^VARIANT\s+\d+:\s*', '', clean_prompt, flags=re.IGNORECASE).strip()
 
     tokens = message.usage.input_tokens + message.usage.output_tokens
     cost = (message.usage.input_tokens * 0.000003) + (message.usage.output_tokens * 0.000015)
@@ -501,8 +503,8 @@ async def run_designer(supabase):
             else:
                 print(f"[DENNIS] ✗ No variants created for '{opp.get('title')}'")
 
-            if total_cost >= 3.0:
-                print(f"[DENNIS] Budget limit approaching (${total_cost:.2f}) — stopping")
+            if total_cost >= 2.0:
+                print(f"[DENNIS] Budget limit reached (${total_cost:.2f}) — stopping")
                 break
 
         result = {
