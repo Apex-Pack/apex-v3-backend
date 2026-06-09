@@ -14,46 +14,12 @@ from helpers import log_task_start, log_task_complete, log_task_failed, update_a
 from observability import report_error
 
 IDEOGRAM_API_BASE = "https://api.ideogram.ai"
-DRIVE_FOLDER_ID = "1n9f2z-ZhnZOFjSdcXrUeT3L_ofCYNloS"
 
 DESIGN_TYPES = {
     "text_based": "Design centers on a phrase, quote, slogan, or typography. The words ARE the design.",
     "flat_vector": "Design is an illustration, icon, or graphic with no text as the focal point.",
     "realistic": "Design requires photorealistic elements, detailed scenery, or photography style.",
 }
-
-
-def get_drive_service():
-    from google.oauth2 import service_account
-    from googleapiclient.discovery import build
-    service_account_info = json.loads(os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON"))
-    credentials = service_account.Credentials.from_service_account_info(
-        service_account_info,
-        scopes=["https://www.googleapis.com/auth/drive"]
-    )
-    return build("drive", "v3", credentials=credentials)
-
-
-async def upload_to_drive(image_data: str, mime_type: str, filename: str) -> dict:
-    try:
-        from googleapiclient.http import MediaIoBaseUpload
-        drive = get_drive_service()
-        image_bytes = base64.b64decode(image_data)
-        file_stream = io.BytesIO(image_bytes)
-        file_metadata = {"name": filename, "parents": [DRIVE_FOLDER_ID]}
-        media = MediaIoBaseUpload(file_stream, mimetype=mime_type, resumable=False)
-        file = drive.files().create(
-            body=file_metadata, media_body=media, fields="id, webViewLink, name"
-        ).execute()
-        return {
-            "success": True,
-            "file_id": file.get("id"),
-            "view_link": file.get("webViewLink"),
-            "filename": file.get("name")
-        }
-    except Exception as e:
-        print(f"[DENNIS] Drive upload error: {str(e)}")
-        return {"success": False, "error": str(e)}
 
 
 # ============================================
@@ -156,16 +122,21 @@ UNIVERSAL RULES:
 - NO photorealistic human faces
 - Print-ready quality
 
-Respond with ONLY the image prompt — no preamble, no explanation. Under 200 words."""
+Respond with ONLY the image generation prompt as plain text — no markdown, no headers, no asterisks, no labels, no preamble. Just the prompt itself. Under 200 words."""
 
     message = client.messages.create(
         model="claude-sonnet-4-20250514",
         max_tokens=400,
         messages=[{"role": "user", "content": prompt}]
     )
+
+    # Strip any markdown formatting Claude might add
+    raw = message.content[0].text.strip()
+    clean_prompt = raw.replace("**", "").replace("##", "").replace("*", "").strip()
+
     tokens = message.usage.input_tokens + message.usage.output_tokens
     cost = (message.usage.input_tokens * 0.000003) + (message.usage.output_tokens * 0.000015)
-    return message.content[0].text.strip(), tokens, cost
+    return clean_prompt, tokens, cost
 
 
 # ============================================
@@ -341,7 +312,6 @@ FIX: [One specific instruction to improve the prompt if FAIL, or None if PASS]""
 
     except Exception as e:
         print(f"[DENNIS] Quality evaluation error: {str(e)}")
-        # If evaluator fails, pass the design through so we don't block on evaluator errors
         return {"score": 7, "verdict": "PASS", "issues": "", "fix": "", "tokens": 0, "cost": 0, "passed": True}
 
 
@@ -349,7 +319,7 @@ FIX: [One specific instruction to improve the prompt if FAIL, or None if PASS]""
 # STEP 5 — SAVE DESIGN
 # ============================================
 
-async def save_design(supabase, opportunity_id: str, variant: int, image_data: str, mime_type: str, prompt: str, product_type: str, quality_score: int, drive_link: str = None, drive_file_id: str = None) -> dict:
+async def save_design(supabase, opportunity_id: str, variant: int, image_data: str, mime_type: str, prompt: str, product_type: str, quality_score: int) -> dict:
     try:
         result = supabase.table("products").insert({
             "opportunity_id": opportunity_id,
@@ -365,8 +335,6 @@ async def save_design(supabase, opportunity_id: str, variant: int, image_data: s
                 "has_image": True,
                 "quality_score": quality_score,
                 "source": "ideogram",
-                "drive_link": drive_link,
-                "drive_file_id": drive_file_id,
                 "generated_at": datetime.now(timezone.utc).isoformat()
             }
         }).execute()
@@ -434,7 +402,6 @@ async def run_designer(supabase):
                 continue
 
             product_type = playbook.get("product_playbook", {}).get("primary_product_type", "shirt")
-            opp_title_clean = opp.get('title', 'design').replace(' ', '_').replace('/', '_')[:40]
             print(f"\n[DENNIS] Designing: '{opp.get('title')}' ({product_type})")
 
             # Step 1 — Classify design type
@@ -494,7 +461,6 @@ async def run_designer(supabase):
                     else:
                         print(f"[DENNIS] ✗ Quality gate failed (score: {quality['score']}/10) — retrying")
                         extra_instruction = quality.get("fix", "")
-                        # Track best result in case we never pass
                         if quality["score"] > best_score:
                             best_score = quality["score"]
                             best_image = image_result
@@ -511,20 +477,7 @@ async def run_designer(supabase):
                 if not best_image:
                     continue
 
-                # Step 5 — Upload to Drive
-                extension = "png"
-                filename = f"{opp_title_clean}_v{variant}_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}.{extension}"
-                drive_result = await upload_to_drive(
-                    best_image["image_data"],
-                    best_image["mime_type"],
-                    filename
-                )
-                if drive_result.get("success"):
-                    print(f"[DENNIS] ✓ Uploaded to Drive: {drive_result.get('view_link')}")
-                else:
-                    print(f"[DENNIS] ✗ Drive upload failed: {drive_result.get('error')}")
-
-                # Step 6 — Save to Supabase
+                # Step 5 — Save to Supabase (Drive removed — image stored as base64)
                 save_result = await save_design(
                     supabase,
                     opp["id"],
@@ -533,9 +486,7 @@ async def run_designer(supabase):
                     best_image["mime_type"],
                     design_prompt,
                     product_type,
-                    best_score,
-                    drive_link=drive_result.get("view_link"),
-                    drive_file_id=drive_result.get("file_id")
+                    best_score
                 )
 
                 if save_result.get("success"):
