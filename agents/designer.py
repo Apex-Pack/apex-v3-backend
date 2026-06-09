@@ -16,11 +16,6 @@ from observability import report_error
 IDEOGRAM_API_BASE = "https://api.ideogram.ai"
 DRIVE_FOLDER_ID = "1n9f2z-ZhnZOFjSdcXrUeT3L_ofCYNloS"
 
-# ============================================
-# DESIGN TYPE CLASSIFIER
-# Determines which image source to use
-# ============================================
-
 DESIGN_TYPES = {
     "text_based": "Design centers on a phrase, quote, slogan, or typography. The words ARE the design.",
     "flat_vector": "Design is an illustration, icon, or graphic with no text as the focal point.",
@@ -65,11 +60,7 @@ async def upload_to_drive(image_data: str, mime_type: str, filename: str) -> dic
 # STEP 1 — CLASSIFY DESIGN TYPE
 # ============================================
 
-async def classify_design_type(client: Anthropic, opportunity: dict, playbook: dict) -> str:
-    """
-    Reads the opportunity and playbook and decides what kind of design this is.
-    Returns: text_based | flat_vector | realistic
-    """
+async def classify_design_type(client: Anthropic, opportunity: dict, playbook: dict) -> tuple:
     prompt = f"""You are Dennis, the Designer agent for APEX V3. Classify the design type for this POD opportunity.
 
 OPPORTUNITY TITLE: {opportunity.get('title')}
@@ -92,7 +83,7 @@ Which design type is this? Respond with ONLY one of: text_based, flat_vector, re
     )
     result = message.content[0].text.strip().lower()
     if result not in DESIGN_TYPES:
-        result = "flat_vector"  # safe default
+        result = "flat_vector"
     print(f"[DENNIS] Design type classified: {result}")
     return result, message.usage.input_tokens + message.usage.output_tokens
 
@@ -102,9 +93,6 @@ Which design type is this? Respond with ONLY one of: text_based, flat_vector, re
 # ============================================
 
 async def generate_design_prompt(client: Anthropic, opportunity: dict, playbook: dict, variant: int, design_type: str) -> tuple:
-    """
-    Crafts the image generation prompt tailored to design type and variant.
-    """
     design_playbook = playbook.get("design_playbook", {})
     copy_playbook = playbook.get("copy_playbook", {})
     product_type = playbook.get("product_playbook", {}).get("primary_product_type", "shirt")
@@ -114,7 +102,6 @@ async def generate_design_prompt(client: Anthropic, opportunity: dict, playbook:
         2: "alternative — same concept, different color scheme or layout approach",
     }
 
-    # Type-specific instructions
     type_instructions = {
         "text_based": """DESIGN TYPE: TEXT-BASED
 - The phrase/slogan from the opportunity title is the entire design
@@ -181,15 +168,13 @@ Respond with ONLY the image prompt — no preamble, no explanation. Under 200 wo
 # ============================================
 
 async def generate_image_ideogram(prompt: str, design_type: str) -> dict:
-    """
-    Calls Ideogram API. Uses transparent background endpoint for POD.
-    Returns base64 image data after downloading the image URL.
-    """
     try:
-        # Use transparent background for POD — cleaner for mockups
-        endpoint = f"{IDEOGRAM_API_BASE}/v1/ideogram-v3/generate-transparent" if design_type in ["text_based", "flat_vector"] else f"{IDEOGRAM_API_BASE}/v1/ideogram-v3/generate"
+        endpoint = (
+            f"{IDEOGRAM_API_BASE}/v1/ideogram-v3/generate-transparent"
+            if design_type in ["text_based", "flat_vector"]
+            else f"{IDEOGRAM_API_BASE}/v1/ideogram-v3/generate"
+        )
 
-        # Style type mapping
         style_map = {
             "text_based": "DESIGN",
             "flat_vector": "DESIGN",
@@ -199,13 +184,16 @@ async def generate_image_ideogram(prompt: str, design_type: str) -> dict:
         async with httpx.AsyncClient(timeout=120.0) as client:
             response = await client.post(
                 endpoint,
-                headers={"Api-Key": os.getenv("IDEOGRAM_API_KEY")},
-                data={
+                headers={
+                    "Api-Key": os.getenv("IDEOGRAM_API_KEY"),
+                    "Content-Type": "application/json"
+                },
+                json={
                     "prompt": prompt,
                     "rendering_speed": "DEFAULT",
                     "style_type": style_map.get(design_type, "DESIGN"),
-                    "magic_prompt": "OFF",  # OFF = use our prompt exactly
-                    "aspect_ratio": "1x1",  # Square for POD thumbnails
+                    "magic_prompt": "OFF",
+                    "aspect_ratio": "1x1",
                 }
             )
 
@@ -224,21 +212,18 @@ async def generate_image_ideogram(prompt: str, design_type: str) -> dict:
 
         print(f"[DENNIS] Image generated — downloading from Ideogram...")
 
-        # Download the image (URLs expire quickly)
         async with httpx.AsyncClient(timeout=60.0) as client:
             img_response = await client.get(image_url)
             if img_response.status_code != 200:
                 return {"success": False, "error": "Failed to download image from Ideogram"}
             image_bytes = img_response.content
 
-        # Convert to base64 for storage (same format as before)
         image_b64 = base64.b64encode(image_bytes).decode("utf-8")
-        mime_type = "image/png"  # Ideogram returns PNG
 
         return {
             "success": True,
             "image_data": image_b64,
-            "mime_type": mime_type,
+            "mime_type": "image/png",
             "source": "ideogram",
             "original_url": image_url,
         }
@@ -253,10 +238,6 @@ async def generate_image_ideogram(prompt: str, design_type: str) -> dict:
 # ============================================
 
 async def evaluate_design_quality(client: Anthropic, image_b64: str, opportunity: dict, design_type: str, prompt_used: str) -> dict:
-    """
-    Sends the generated image to Claude Vision for quality evaluation.
-    Returns a score 1-10 and specific failure reasons if under 7.
-    """
     try:
         eval_prompt = f"""You are a quality control agent for a professional Etsy POD shop. Evaluate this design ruthlessly.
 
@@ -318,7 +299,6 @@ FIX: [One specific instruction to improve the prompt if FAIL, or "None" if PASS]
         tokens = message.usage.input_tokens + message.usage.output_tokens
         cost = (message.usage.input_tokens * 0.000003) + (message.usage.output_tokens * 0.000015)
 
-        # Parse the response
         lines = response_text.split("\n")
         score = 0
         verdict = "FAIL"
@@ -354,7 +334,6 @@ FIX: [One specific instruction to improve the prompt if FAIL, or "None" if PASS]
 
     except Exception as e:
         print(f"[DENNIS] Quality evaluation error: {str(e)}")
-        # If evaluation fails, pass the design through — don't block on evaluator error
         return {"score": 7, "verdict": "PASS", "issues": "", "fix": "", "tokens": 0, "cost": 0, "passed": True}
 
 
@@ -410,7 +389,6 @@ async def run_designer(supabase):
 
         client = Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 
-        # Pull opportunities ready for design
         response = supabase.table("opportunities")\
             .select("*")\
             .eq("status", "in_production")\
@@ -474,7 +452,6 @@ async def run_designer(supabase):
                     design_prompt, prompt_tokens, prompt_cost = await generate_design_prompt(
                         client, opp, playbook, variant, design_type
                     )
-                    # Add fix instruction from previous failed attempt
                     if extra_instruction:
                         design_prompt = f"{design_prompt}. IMPORTANT: {extra_instruction}"
 
@@ -511,7 +488,6 @@ async def run_designer(supabase):
                         extra_instruction = quality.get("fix", "")
                         if attempt == max_attempts:
                             print(f"[DENNIS] Max attempts reached — best score was {quality['score']}/10")
-                            # Use it anyway if score >= 5, otherwise skip
                             if quality["score"] >= 5:
                                 best_image = image_result
                                 best_score = quality["score"]
