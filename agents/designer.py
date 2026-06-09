@@ -109,20 +109,25 @@ async def generate_design_prompt(client: Anthropic, opportunity: dict, playbook:
 - Text must be large, bold, and readable at thumbnail size
 - Add minimal supporting graphic elements around or behind the text if appropriate
 - Specify the EXACT text to appear in the design
-- Keep it clean — 1-3 lines of text maximum""",
+- Keep it clean — 1-3 lines of text maximum
+- The text must be spelled perfectly and be the dominant element""",
 
         "flat_vector": """DESIGN TYPE: FLAT VECTOR ILLUSTRATION
-- Create a clean graphic illustration with no text
-- Use flat design style with bold colors and simple shapes
-- Think icon-quality output — recognizable at small sizes
-- High contrast against white background
-- Vector-style, not painterly or photorealistic""",
+- Maximum 3 visual elements total — simplicity is mandatory
+- Each element must be a clean, recognizable geometric shape (circle, rectangle, triangle, line)
+- Flat color fills only — no gradients, no shadows, no textures
+- Generous empty space — the design should breathe
+- Bold, high contrast colors against white background
+- Think: Swiss poster design, not decorative illustration
+- If it cannot be described in one sentence, it is too complex
+- Be extremely specific: name each shape, its color, and its position""",
 
         "realistic": """DESIGN TYPE: REALISTIC
 - Photo-quality output with detailed elements
 - Still suitable for POD — no human faces
 - Rich detail that looks professional at print size
-- Can include textures, depth, lighting effects"""
+- Can include textures, depth, lighting effects
+- Describe the scene specifically — subject, lighting, background"""
     }
 
     prompt = f"""You are Dennis, the Designer agent for APEX V3. Write a precise image generation prompt for a print-on-demand {product_type} design.
@@ -247,7 +252,7 @@ BRIEF:
 - Prompt used: {prompt_used[:300]}
 
 SCORING CRITERIA:
-1. Does the design match the concept? (A shirt that says "rum not run" must have those words)
+1. Does the design match the concept exactly?
 2. Is any text spelled correctly and readable at small sizes?
 3. Does it look professional enough to sell on Etsy for $20-30?
 4. Is the design clean with high contrast on white/transparent background?
@@ -266,12 +271,13 @@ FAILURE PATTERNS — automatic low scores:
 - Looks like clip art or MS Paint output
 - Multiple competing elements with no clear focal point
 - Background contamination or artifacts
+- More elements than specified in the prompt
 
-Respond in this exact format:
-SCORE: [1-10]
+Respond in this exact format with no extra text:
+SCORE: [number 1-10]
 VERDICT: [PASS if 7+, FAIL if under 7]
-ISSUES: [List specific problems if FAIL, or "None" if PASS]
-FIX: [One specific instruction to improve the prompt if FAIL, or "None" if PASS]"""
+ISSUES: [List specific problems if FAIL, or None if PASS]
+FIX: [One specific instruction to improve the prompt if FAIL, or None if PASS]"""
 
         message = client.messages.create(
             model="claude-sonnet-4-20250514",
@@ -301,7 +307,6 @@ FIX: [One specific instruction to improve the prompt if FAIL, or "None" if PASS]
 
         lines = response_text.split("\n")
         score = 0
-        verdict = "FAIL"
         issues = ""
         fix = ""
 
@@ -311,12 +316,14 @@ FIX: [One specific instruction to improve the prompt if FAIL, or "None" if PASS]
                     score = int(line.replace("SCORE:", "").strip())
                 except:
                     score = 0
-            elif line.startswith("VERDICT:"):
-                verdict = line.replace("VERDICT:", "").strip()
             elif line.startswith("ISSUES:"):
                 issues = line.replace("ISSUES:", "").strip()
             elif line.startswith("FIX:"):
                 fix = line.replace("FIX:", "").strip()
+
+        # Always derive verdict from score — never trust parsed verdict
+        verdict = "PASS" if score >= 7 else "FAIL"
+        passed = score >= 7
 
         print(f"[DENNIS] Quality score: {score}/10 — {verdict}")
         if issues and issues != "None":
@@ -329,11 +336,12 @@ FIX: [One specific instruction to improve the prompt if FAIL, or "None" if PASS]
             "fix": fix,
             "tokens": tokens,
             "cost": cost,
-            "passed": score >= 7
+            "passed": passed
         }
 
     except Exception as e:
         print(f"[DENNIS] Quality evaluation error: {str(e)}")
+        # If evaluator fails, pass the design through so we don't block on evaluator errors
         return {"score": 7, "verdict": "PASS", "issues": "", "fix": "", "tokens": 0, "cost": 0, "passed": True}
 
 
@@ -453,7 +461,7 @@ async def run_designer(supabase):
                         client, opp, playbook, variant, design_type
                     )
                     if extra_instruction:
-                        design_prompt = f"{design_prompt}. IMPORTANT: {extra_instruction}"
+                        design_prompt = f"{design_prompt}. IMPORTANT CORRECTION: {extra_instruction}"
 
                     total_tokens += prompt_tokens
                     total_cost += prompt_cost
@@ -486,13 +494,17 @@ async def run_designer(supabase):
                     else:
                         print(f"[DENNIS] ✗ Quality gate failed (score: {quality['score']}/10) — retrying")
                         extra_instruction = quality.get("fix", "")
+                        # Track best result in case we never pass
+                        if quality["score"] > best_score:
+                            best_score = quality["score"]
+                            best_image = image_result
+
                         if attempt == max_attempts:
-                            print(f"[DENNIS] Max attempts reached — best score was {quality['score']}/10")
-                            if quality["score"] >= 5:
-                                best_image = image_result
-                                best_score = quality["score"]
+                            print(f"[DENNIS] Max attempts reached — best score was {best_score}/10")
+                            if best_score >= 5:
                                 print(f"[DENNIS] Using best available (score: {best_score}/10)")
                             else:
+                                best_image = None
                                 designs_rejected += 1
                                 print(f"[DENNIS] ✗ Design rejected — score too low")
 
