@@ -469,7 +469,7 @@ async def run_designer(supabase):
 
                         if attempt == max_attempts:
                             print(f"[DENNIS] Max attempts reached — best score was {best_score}/10")
-                            if best_score >= 5:
+                            if best_score >= 7:
                                 print(f"[DENNIS] Using best available (score: {best_score}/10)")
                             else:
                                 best_image = None
