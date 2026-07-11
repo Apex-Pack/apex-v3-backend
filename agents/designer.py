@@ -44,7 +44,7 @@ DESIGN TYPES:
 Which design type is this? Respond with ONLY one of: text_based, flat_vector, realistic"""
 
     message = client.messages.create(
-        model="claude-sonnet-4-20250514",
+        model="claude-sonnet-5",
         max_tokens=20,
         messages=[{"role": "user", "content": prompt}]
     )
@@ -126,7 +126,7 @@ UNIVERSAL RULES:
 Respond with ONLY the image generation prompt as plain text — no markdown, no headers, no asterisks, no labels, no preamble. Just the prompt itself. Under 200 words."""
 
     message = client.messages.create(
-        model="claude-sonnet-4-20250514",
+        model="claude-sonnet-5",
         max_tokens=400,
         messages=[{"role": "user", "content": prompt}]
     )
@@ -253,7 +253,7 @@ ISSUES: [List specific problems if FAIL, or None if PASS]
 FIX: [One specific instruction to improve the prompt if FAIL, or None if PASS]"""
 
         message = client.messages.create(
-            model="claude-sonnet-4-20250514",
+            model="claude-sonnet-5",
             max_tokens=300,
             messages=[{
                 "role": "user",
