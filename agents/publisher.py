@@ -7,6 +7,7 @@ import os
 import json
 import httpx
 import base64
+import asyncio
 from datetime import datetime, timezone
 from helpers import log_task_start, log_task_complete, log_task_failed, update_agent_status
 from observability import report_error
@@ -153,7 +154,38 @@ async def run_guardrails(supabase, listing: dict, product: dict, opportunity: di
     }
 
 
-async def create_printful_product(listing: dict, product: dict, printful_products: list) -> dict:
+async def upload_design_to_storage(supabase, product: dict) -> str:
+    """
+    Uploads the design image from product.design_assets.image_data to the
+    design-assets Storage bucket and returns its public URL.
+    """
+    try:
+        design_assets = product.get("design_assets", {}) or {}
+        image_data = design_assets.get("image_data")
+        mime_type = design_assets.get("mime_type", "image/png")
+
+        if not image_data:
+            print(f"[PAM] No image data found in product record")
+            return None
+
+        image_bytes = base64.b64decode(image_data)
+        extension = "png" if "png" in mime_type else "jpg"
+        path = f"{product.get('id')}.{extension}"
+
+        supabase.storage.from_("design-assets").upload(
+            path, image_bytes, {"content-type": mime_type, "upsert": "true"}
+        )
+
+        public_url = supabase.storage.from_("design-assets").get_public_url(path)
+        print(f"[PAM] ✓ Uploaded design to storage: {public_url}")
+        return public_url
+
+    except Exception as e:
+        print(f"[PAM] Storage upload error: {str(e)}")
+        return None
+
+
+async def create_printful_product(supabase, listing: dict, product: dict, printful_products: list) -> dict:
     product_type = product.get("product_type", "shirt")
     if product_type == "digital":
         return {"success": True, "printful_id": None, "is_digital": True}
@@ -172,6 +204,10 @@ async def create_printful_product(listing: dict, product: dict, printful_product
 
     first_variant = sync_variants[0]
 
+    public_url = await upload_design_to_storage(supabase, product)
+    if not public_url:
+        return {"success": False, "error": "Failed to upload design image to storage"}
+
     try:
         price = listing.get("price", 24.99)
         async with httpx.AsyncClient() as client:
@@ -189,35 +225,80 @@ async def create_printful_product(listing: dict, product: dict, printful_product
                         {
                             "retail_price": str(price),
                             "variant_id": first_variant.get("variant_id"),
-                            "files": []
+                            "files": [{"url": public_url}]
                         }
                     ]
                 },
                 timeout=30.0
             )
-            if response.status_code in [200, 201]:
-                printful_id = response.json().get("result", {}).get("id")
-                return {"success": True, "printful_id": printful_id}
-            print(f"[PAM] Printful create error: {response.status_code} — {response.text[:200]}")
-            return {"success": False, "error": f"Printful error {response.status_code}"}
+            if response.status_code not in [200, 201]:
+                print(f"[PAM] Printful create error: {response.status_code} — {response.text[:200]}")
+                return {"success": False, "error": f"Printful error {response.status_code}"}
+
+            printful_id = response.json().get("result", {}).get("id")
+
+        # Printful generates mockups asynchronously — poll until they appear
+        mockup_url = None
+        elapsed = 0
+        poll_interval = 5
+        max_wait = 60
+        while elapsed < max_wait:
+            await asyncio.sleep(poll_interval)
+            elapsed += poll_interval
+
+            poll_detail = await get_printful_product_detail(printful_id)
+            for sync_variant in poll_detail.get("sync_variants", []):
+                for file in sync_variant.get("files", []):
+                    if file.get("type") == "preview" and file.get("preview_url"):
+                        mockup_url = file.get("preview_url")
+                        break
+                if mockup_url:
+                    break
+
+            if mockup_url:
+                print(f"[PAM] ✓ Mockup ready: {mockup_url}")
+                break
+            print(f"[PAM] Waiting for Printful mockup... ({elapsed}s)")
+
+        return {"success": True, "printful_id": printful_id, "mockup_url": mockup_url}
+
     except Exception as e:
         return {"success": False, "error": str(e)}
 
 
-async def upload_listing_image(supabase, etsy_listing_id: str, shop_id: str, product: dict) -> dict:
+async def upload_listing_image(supabase, etsy_listing_id: str, shop_id: str, product: dict, mockup_url: str = None) -> dict:
     """
-    Uploads the design image from the product record to an Etsy listing.
+    Uploads a listing image to Etsy. Prefers the Printful mockup_url when
+    present; falls back to Dennis's raw design image otherwise so a Printful
+    hiccup never fully blocks the listing.
     """
     try:
-        design_assets = product.get("design_assets", {})
-        image_data = design_assets.get("image_data")
-        mime_type = design_assets.get("mime_type", "image/png")
+        image_bytes = None
+        mime_type = "image/png"
 
-        if not image_data:
-            print(f"[PAM] No image data found in product record")
-            return {"success": False, "error": "No image data in product"}
+        if mockup_url:
+            try:
+                async with httpx.AsyncClient(timeout=60.0) as client:
+                    mockup_response = await client.get(mockup_url)
+                if mockup_response.status_code == 200:
+                    image_bytes = mockup_response.content
+                    mime_type = mockup_response.headers.get("content-type", "image/png")
+                else:
+                    print(f"[PAM] Mockup download failed: {mockup_response.status_code} — falling back to raw image")
+            except Exception as e:
+                print(f"[PAM] Mockup download error: {str(e)} — falling back to raw image")
 
-        image_bytes = base64.b64decode(image_data)
+        if image_bytes is None:
+            design_assets = product.get("design_assets", {})
+            image_data = design_assets.get("image_data")
+            mime_type = design_assets.get("mime_type", "image/png")
+
+            if not image_data:
+                print(f"[PAM] No image data found in product record")
+                return {"success": False, "error": "No image data in product"}
+
+            image_bytes = base64.b64decode(image_data)
+
         extension = "png" if "png" in mime_type else "jpg"
         filename = f"listing_{etsy_listing_id}.{extension}"
 
@@ -388,11 +469,13 @@ async def run_publisher(supabase):
             shop_id = "50046147"
 
             product_type = product.get("product_type", "shirt")
+            mockup_url = None
             if product_type != "digital" and printful_products:
                 print(f"[PAM] Creating Printful product...")
-                printful_result = await create_printful_product(listing, product, printful_products)
+                printful_result = await create_printful_product(supabase, listing, product, printful_products)
                 if printful_result.get("success"):
                     printful_id = printful_result.get("printful_id")
+                    mockup_url = printful_result.get("mockup_url")
                     print(f"[PAM] ✓ Printful product: {printful_id}")
                 else:
                     print(f"[PAM] Printful failed: {printful_result.get('error')} — continuing")
@@ -414,7 +497,7 @@ async def run_publisher(supabase):
 
             # Step 2 — Upload image
             print(f"[PAM] Uploading image to listing {etsy_listing_id}...")
-            image_result = await upload_listing_image(supabase, etsy_listing_id, shop_id, product)
+            image_result = await upload_listing_image(supabase, etsy_listing_id, shop_id, product, mockup_url)
 
             if not image_result.get("success"):
                 print(f"[PAM] ✗ Image upload failed: {image_result.get('error')} — listing stays draft")
