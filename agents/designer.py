@@ -11,7 +11,7 @@ import base64
 import io
 from anthropic import Anthropic
 from datetime import datetime, timezone
-from helpers import log_task_start, log_task_complete, log_task_failed, update_agent_status
+from helpers import log_task_start, log_task_complete, log_task_failed, update_agent_status, extract_text
 from observability import report_error
 
 IDEOGRAM_API_BASE = "https://api.ideogram.ai"
@@ -48,7 +48,7 @@ Which design type is this? Respond with ONLY one of: text_based, flat_vector, re
         max_tokens=20,
         messages=[{"role": "user", "content": prompt}]
     )
-    result = message.content[0].text.strip().lower()
+    result = extract_text(message).strip().lower()
     if result not in DESIGN_TYPES:
         result = "flat_vector"
     print(f"[DENNIS] Design type classified: {result}")
@@ -132,7 +132,7 @@ Respond with ONLY the image generation prompt as plain text — no markdown, no 
     )
 
     # Strip markdown formatting and any variant labels Claude sneaks in
-    raw = message.content[0].text.strip()
+    raw = extract_text(message).strip()
     clean_prompt = raw.replace("**", "").replace("##", "").replace("*", "").strip()
     clean_prompt = re.sub(r'^VARIANT\s+\d+:\s*', '', clean_prompt, flags=re.IGNORECASE).strip()
 
@@ -274,7 +274,7 @@ FIX: [One specific instruction to improve the prompt if FAIL, or None if PASS]""
             }]
         )
 
-        response_text = message.content[0].text.strip()
+        response_text = extract_text(message).strip()
         tokens = message.usage.input_tokens + message.usage.output_tokens
         cost = (message.usage.input_tokens * 0.000003) + (message.usage.output_tokens * 0.000015)
 

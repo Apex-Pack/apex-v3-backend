@@ -8,7 +8,7 @@ import json
 import httpx
 from anthropic import Anthropic
 from datetime import datetime, timezone
-from helpers import log_task_start, log_task_complete, log_task_failed, update_agent_status
+from helpers import log_task_start, log_task_complete, log_task_failed, update_agent_status, extract_text
 from observability import report_error
 from token_manager import get_etsy_headers
 
@@ -158,7 +158,7 @@ Respond ONLY with valid JSON:
         messages=[{"role": "user", "content": prompt}]
     )
 
-    response_text = message.content[0].text
+    response_text = extract_text(message)
     tokens_used = message.usage.input_tokens + message.usage.output_tokens
     cost_usd = (message.usage.input_tokens * 0.000003) + (message.usage.output_tokens * 0.000015)
 

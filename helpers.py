@@ -10,6 +10,15 @@
 from datetime import datetime, timezone
 
 
+def extract_text(message) -> str:
+    """Extracts the first text block from a Claude API message, regardless
+    of block order (e.g. a thinking block preceding the text block)."""
+    for block in message.content:
+        if block.type == "text":
+            return block.text
+    raise ValueError("No text block in response")
+
+
 async def log_task_start(supabase, agent: str, room: str, task_type: str, input_data: dict) -> str:
     """Creates a task record when an agent starts working."""
     response = supabase.table("tasks").insert({
